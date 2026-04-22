@@ -1,20 +1,12 @@
-import { randomBytes } from 'node:crypto'
 import { generateApiKey, hashApiKey } from './auth/api-key.js'
 import type { Store } from './db/store.js'
 import { SlopItError } from './errors.js'
+import { generateShortId } from './ids.js'
 import {
   CreateBlogInputSchema,
   type Blog,
   type CreateBlogInput,
 } from './schema/index.js'
-
-// 32 URL-safe characters (no I/l/o/0/1). Power of 2 → modulo is unbiased.
-const ID_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789'
-
-function generateShortId(): string {
-  const bytes = randomBytes(8)
-  return Array.from(bytes, (b) => ID_ALPHABET[b % 32]).join('')
-}
 
 /**
  * Pure predicate so the narrow match logic is testable without running the DB.
