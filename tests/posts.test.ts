@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { PostInputSchema } from '../src/schema/index.js'
+import { isPostSlugConflict, autoExcerpt } from '../src/posts.js'
 
 describe('PostInputSchema', () => {
   it('accepts the minimum well-formed input', () => {
@@ -79,5 +80,76 @@ describe('PostInputSchema', () => {
         body: 'x',
       })).not.toThrow()
     })
+  })
+})
+
+describe('isPostSlugConflict', () => {
+  function sqliteUniqueError(constraint: string): Error {
+    const e = new Error(`UNIQUE constraint failed: ${constraint}`) as NodeJS.ErrnoException
+    e.code = 'SQLITE_CONSTRAINT_UNIQUE'
+    return e
+  }
+
+  it('is true for UNIQUE errors on posts.blog_id, posts.slug (compound key)', () => {
+    expect(isPostSlugConflict(sqliteUniqueError('posts.blog_id, posts.slug'))).toBe(true)
+  })
+
+  it('is false for UNIQUE errors on other columns', () => {
+    expect(isPostSlugConflict(sqliteUniqueError('posts.id'))).toBe(false)
+    expect(isPostSlugConflict(sqliteUniqueError('posts.slug'))).toBe(false)
+    expect(isPostSlugConflict(sqliteUniqueError('blogs.name'))).toBe(false)
+    expect(isPostSlugConflict(sqliteUniqueError('blogs.id'))).toBe(false)
+    expect(isPostSlugConflict(sqliteUniqueError('api_keys.key_hash'))).toBe(false)
+  })
+
+  it('is false for FK errors, plain Errors, and non-Error values', () => {
+    const fkErr = new Error('FOREIGN KEY constraint failed') as NodeJS.ErrnoException
+    fkErr.code = 'SQLITE_CONSTRAINT_FOREIGNKEY'
+    expect(isPostSlugConflict(fkErr)).toBe(false)
+
+    expect(isPostSlugConflict(new Error('UNIQUE constraint failed: posts.blog_id, posts.slug'))).toBe(false)
+
+    expect(isPostSlugConflict(null)).toBe(false)
+    expect(isPostSlugConflict(undefined)).toBe(false)
+    expect(isPostSlugConflict('not an error')).toBe(false)
+    expect(isPostSlugConflict({
+      code: 'SQLITE_CONSTRAINT_UNIQUE',
+      message: 'posts.blog_id, posts.slug',
+    })).toBe(false)
+  })
+})
+
+describe('autoExcerpt', () => {
+  it('returns body unchanged when short enough', () => {
+    expect(autoExcerpt('short body')).toBe('short body')
+  })
+
+  it('strips common markdown syntax', () => {
+    expect(autoExcerpt('# Heading\n\nBody here.')).toBe('Heading Body here.')
+    expect(autoExcerpt('**bold** and *italic* and `code`')).toBe('bold and italic and code')
+    expect(autoExcerpt('> a blockquote')).toBe('a blockquote')
+    expect(autoExcerpt('- item 1\n- item 2')).toBe('item 1 item 2')
+    expect(autoExcerpt('[text](url)')).toBe('text')
+    expect(autoExcerpt('![alt](url)')).toBe('')
+  })
+
+  it('collapses whitespace', () => {
+    expect(autoExcerpt('a   b\n\nc')).toBe('a b c')
+  })
+
+  it('truncates at ~160 chars and appends an ellipsis', () => {
+    const longBody = 'word '.repeat(50)
+    const excerpt = autoExcerpt(longBody)
+    expect(excerpt.length).toBeLessThanOrEqual(161)
+    expect(excerpt.endsWith('…')).toBe(true)
+  })
+
+  it('does not append ellipsis when under the threshold', () => {
+    expect(autoExcerpt('short').endsWith('…')).toBe(false)
+  })
+
+  it('handles empty or whitespace-only body gracefully', () => {
+    expect(autoExcerpt('')).toBe('')
+    expect(autoExcerpt('   ')).toBe('')
   })
 })
