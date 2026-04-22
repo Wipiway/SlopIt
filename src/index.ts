@@ -7,6 +7,7 @@ export type { Store, StoreConfig } from './db/store.js'
 export * from './schema/index.js'
 
 export { createBlog, createApiKey } from './blogs.js'
+export { createPost } from './posts.js'
 
 export { SlopItError } from './errors.js'
 export type { SlopItErrorCode } from './errors.js'

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createStore, type Store } from '../src/db/store.js'
 import { createBlog } from '../src/blogs.js'
 import { SlopItError } from '../src/errors.js'
@@ -449,5 +449,109 @@ describe('createPost', () => {
 
     const indexHtml = readFileSync(join(outputDir, blog.id, 'index.html'), 'utf8')
     expect(indexHtml).toContain('>First Post<')
+  })
+})
+
+describe('public barrel — createPost exports', () => {
+  it('exposes createPost and PostInputSchema', async () => {
+    const mod = await import('../src/index.js')
+    expect(typeof mod.createPost).toBe('function')
+    expect(typeof mod.PostInputSchema).toBe('object')
+  })
+
+  it('exposes the POST_SLUG_CONFLICT code through SlopItError', () => {
+    const err = new SlopItError('POST_SLUG_CONFLICT', 'x', { slug: 's' })
+    expect(err.code).toBe('POST_SLUG_CONFLICT')
+  })
+})
+
+describe('createPost — INSERT-time narrow-match branch', () => {
+  let dir: string
+  let store: Store
+  let outputDir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'slopit-'))
+    store = createStore({ dbPath: join(dir, 'test.db') })
+    outputDir = join(dir, 'out')
+  })
+
+  afterEach(() => {
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it('maps an INSERT-time UNIQUE conflict to POST_SLUG_CONFLICT even when preflight missed', () => {
+    const { blog } = createBlog(store, {})
+    const r = createRenderer({ store, outputDir, baseUrl: 'https://test.example.com' })
+
+    // Seed a post with slug 'race'.
+    createPost(store, r, blog.id, { title: 'First', body: 'x', slug: 'race' })
+
+    // Stub the preflight SELECT so it reports no conflict. The INSERT will
+    // then hit the real UNIQUE(blog_id, slug) violation, exercising the
+    // narrow-match branch inside createPost's try/catch.
+    const realPrepare = store.db.prepare.bind(store.db)
+    vi.spyOn(store.db, 'prepare').mockImplementation(((sql: string) => {
+      if (/SELECT 1 FROM posts WHERE blog_id = \? AND slug = \?/.test(sql)) {
+        return { get: () => undefined } as any
+      }
+      return realPrepare(sql)
+    }) as any)
+
+    let caught: unknown
+    try {
+      createPost(store, r, blog.id, { title: 'Second', body: 'y', slug: 'race' })
+    } catch (e) { caught = e }
+
+    expect(caught).toBeInstanceOf(SlopItError)
+    expect((caught as SlopItError).code).toBe('POST_SLUG_CONFLICT')
+    expect((caught as SlopItError).details).toEqual({ slug: 'race' })
+  })
+})
+
+describe('createPost — compensation DELETE best-effort', () => {
+  let dir: string
+  let store: Store
+  let outputDir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'slopit-'))
+    store = createStore({ dbPath: join(dir, 'test.db') })
+    outputDir = join(dir, 'out')
+  })
+
+  afterEach(() => {
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it('swallows a DELETE failure during compensation and still throws the original render error', () => {
+    const { blog } = createBlog(store, {})
+    const r = createRenderer({ store, outputDir, baseUrl: 'https://test.example.com' })
+
+    // Force render to fail: make output a file so mkdirSync throws.
+    writeFileSync(outputDir, 'not a dir')
+
+    // Stub the DELETE prepare to throw. Other queries are unaffected.
+    const realPrepare = store.db.prepare.bind(store.db)
+    vi.spyOn(store.db, 'prepare').mockImplementation(((sql: string) => {
+      if (/DELETE FROM posts WHERE id = \?/.test(sql)) {
+        throw new Error('simulated DELETE failure')
+      }
+      return realPrepare(sql)
+    }) as any)
+
+    let caught: unknown
+    try {
+      createPost(store, r, blog.id, { title: 'T', body: 'x' })
+    } catch (e) { caught = e }
+
+    // Original render error bubbles, not the DELETE failure.
+    expect(caught).toBeInstanceOf(Error)
+    expect((caught as Error).message).not.toContain('simulated DELETE failure')
+    expect(caught).not.toBeInstanceOf(SlopItError)
   })
 })

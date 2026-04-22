@@ -444,3 +444,36 @@ describe('createRenderer — renderBlog', () => {
     expect(html).not.toContain('href="../style.css"')
   })
 })
+
+describe('renderPostList — null publishedAt branch', () => {
+  it('renders an empty datetime attribute when publishedAt is null', () => {
+    const out = renderPostList([makePost({ publishedAt: null })])
+    expect(out).toContain('datetime=""')
+  })
+})
+
+describe('renderPost — null publishedAt branch', () => {
+  let dir: string
+  let store: Store
+  let outputDir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'slopit-'))
+    store = createStore({ dbPath: join(dir, 'test.db') })
+    outputDir = join(dir, 'out')
+  })
+
+  afterEach(() => {
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('renders an empty datetime attribute when a post has no publishedAt (still writes file)', () => {
+    const { blog } = createBlog(store, {})
+    const renderer = createRenderer({ store, outputDir, baseUrl: 'https://ex.com' })
+    renderer.renderPost(blog.id, makePost({ blogId: blog.id, slug: 's', publishedAt: null }))
+
+    const html = readFileSync(join(outputDir, blog.id, 's', 'index.html'), 'utf8')
+    expect(html).toContain('datetime=""')
+  })
+})

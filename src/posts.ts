@@ -193,7 +193,8 @@ export function createPost(
       slug: string
       title: string
       body: string
-      excerpt: string | null
+      // createPost always writes a non-null excerpt (explicit or auto).
+      excerpt: string
       tags: string
       status: 'draft' | 'published'
       seo_title: string | null
@@ -211,7 +212,7 @@ export function createPost(
     slug: row.slug,
     title: row.title,
     body: row.body,
-    excerpt: row.excerpt ?? undefined,
+    excerpt: row.excerpt,
     tags: JSON.parse(row.tags) as string[],
     status: row.status,
     seoTitle: row.seo_title ?? undefined,
