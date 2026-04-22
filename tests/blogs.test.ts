@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { isBlogNameConflict } from '../src/blogs.js'
+import { CreateBlogInputSchema } from '../src/schema/index.js'
 
 function sqliteUniqueError(constraint: string): Error {
   const e = new Error(`UNIQUE constraint failed: ${constraint}`) as NodeJS.ErrnoException
@@ -32,8 +33,6 @@ describe('isBlogNameConflict', () => {
     expect(isBlogNameConflict({ code: 'SQLITE_CONSTRAINT_UNIQUE', message: 'blogs.name' })).toBe(false)
   })
 })
-
-import { CreateBlogInputSchema } from '../src/schema/index.js'
 
 describe('CreateBlogInputSchema', () => {
   it('accepts empty input; name undefined, theme defaults to minimal', () => {
