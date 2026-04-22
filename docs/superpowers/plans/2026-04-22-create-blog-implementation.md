@@ -313,7 +313,7 @@ export const CreateBlogInputSchema = z.object({
     .optional(),
   theme: z.enum(['minimal', 'classic', 'zine']).default('minimal'),
 })
-export type CreateBlogInput = z.infer<typeof CreateBlogInputSchema>
+export type CreateBlogInput = z.input<typeof CreateBlogInputSchema>
 ```
 
 - [ ] **Step 3.4: Run tests + typecheck, verify pass**
@@ -577,7 +577,10 @@ describe('createBlog — narrow error mapping through the function', () => {
     expect(caught).toBeInstanceOf(Error)
     expect(caught).not.toBeInstanceOf(SlopItError)
     expect((caught as Error).message).toContain('blogs.id')
-    expect((caught as NodeJS.ErrnoException).code).toBe('SQLITE_CONSTRAINT_UNIQUE')
+    // SQLite raises SQLITE_CONSTRAINT_PRIMARYKEY for PK violations
+    // (not SQLITE_CONSTRAINT_UNIQUE); our narrow predicate matches UNIQUE
+    // only, so it correctly returns false for this case.
+    expect((caught as NodeJS.ErrnoException).code).toBe('SQLITE_CONSTRAINT_PRIMARYKEY')
   })
 })
 ```

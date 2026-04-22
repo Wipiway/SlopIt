@@ -71,10 +71,12 @@ export const CreateBlogInputSchema = z.object({
     .optional(),
   theme: z.enum(['minimal', 'classic', 'zine']).default('minimal'),
 })
-export type CreateBlogInput = z.infer<typeof CreateBlogInputSchema>
+export type CreateBlogInput = z.input<typeof CreateBlogInputSchema>
 ```
 
 `name` is DNS-subdomain-safe: lowercase alphanumerics + hyphens, no leading or trailing hyphen, 2–63 chars. The `.min(2)` matches what the regex structurally enforces (two required character classes). 1-char blog names are disallowed — they're conventionally reserved, and nobody needs `a.slopit.io`.
+
+Note: the exported type uses `z.input<...>`, not `z.infer<...>`. `z.infer` gives the parsed-output shape where `theme` is required (Zod will always fill it in post-parse); `z.input` gives the caller-facing shape where `theme` is optional. `createBlog(store, input)` takes the input shape — callers omit `theme` and get the default.
 
 The same constraints apply whether the blog ends up on a subdomain or not, for consistency.
 
