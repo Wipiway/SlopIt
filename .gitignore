@@ -1,0 +1,32 @@
+# deps + build
+node_modules/
+dist/
+coverage/
+
+# test / cache
+.vitest-cache/
+
+# editor + OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Claude Code local state
+.claude/
+
+# env files (none should exist here, but defensively ignore)
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# sqlite dev databases + wal files (in case someone runs the example from repo root)
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
