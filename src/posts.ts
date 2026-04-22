@@ -1,5 +1,9 @@
+import { getBlogInternal } from './blogs.js'
 import type { Store } from './db/store.js'
-import type { Post } from './schema/index.js'
+import { SlopItError } from './errors.js'
+import { generateShortId, generateSlug } from './ids.js'
+import type { Renderer } from './rendering/generator.js'
+import { PostInputSchema, type Post, type PostInput } from './schema/index.js'
 
 /**
  * Pure predicate: was this error SQLite's UNIQUE constraint failing on
@@ -93,4 +97,145 @@ export function listPublishedPostsForBlog(store: Store, blogId: string): Post[] 
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }))
+}
+
+/**
+ * Create a post. For published posts, also renders the post page + blog
+ * index + CSS to disk, and returns a postUrl. For drafts, writes the DB
+ * row only and returns { post } without postUrl.
+ *
+ * See docs/superpowers/specs/2026-04-22-create-post-design.md for the full
+ * contract, including the weakened atomicity invariant: if render fails,
+ * createPost attempts compensation via DELETE FROM posts. If the DELETE
+ * also fails (extraordinarily rare — usually indicates DB corruption or
+ * I/O failure), the row persists and operator cleanup is needed.
+ */
+export function createPost(
+  store: Store,
+  renderer: Renderer,
+  blogId: string,
+  input: PostInput,
+): { post: Post; postUrl?: string } {
+  const parsed = PostInputSchema.parse(input)
+
+  // Step 2: blog exists (throws BLOG_NOT_FOUND with details.blogId)
+  getBlogInternal(store, blogId)
+
+  // Step 3: resolve slug (superRefine already rejected empty auto-slug)
+  const slug = parsed.slug ?? generateSlug(parsed.title)
+
+  // Step 4: derived fields
+  const id = generateShortId()
+  const excerpt = parsed.excerpt ?? autoExcerpt(parsed.body)
+  const now = new Date().toISOString()
+  const publishedAt = parsed.status === 'published' ? now : null
+  const tagsJson = JSON.stringify(parsed.tags)
+
+  // Step 5: transactional INSERT with preflight + narrow-match
+  const tx = store.db.transaction(() => {
+    const exists = store.db
+      .prepare('SELECT 1 FROM posts WHERE blog_id = ? AND slug = ?')
+      .get(blogId, slug)
+    if (exists) {
+      throw new SlopItError(
+        'POST_SLUG_CONFLICT',
+        `Slug "${slug}" is already taken in this blog`,
+        { slug },
+      )
+    }
+    try {
+      store.db
+        .prepare(
+          `INSERT INTO posts (
+             id, blog_id, slug, title, body, excerpt, tags, status,
+             seo_title, seo_description, author, cover_image, published_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          id,
+          blogId,
+          slug,
+          parsed.title,
+          parsed.body,
+          excerpt,
+          tagsJson,
+          parsed.status,
+          parsed.seoTitle ?? null,
+          parsed.seoDescription ?? null,
+          parsed.author ?? null,
+          parsed.coverImage ?? null,
+          publishedAt,
+        )
+    } catch (e) {
+      if (isPostSlugConflict(e)) {
+        throw new SlopItError(
+          'POST_SLUG_CONFLICT',
+          `Slug "${slug}" is already taken in this blog`,
+          { slug },
+        )
+      }
+      throw e
+    }
+  })
+  tx()
+
+  // Hydrate the row we just wrote
+  const row = store.db
+    .prepare(
+      `SELECT id, blog_id, slug, title, body, excerpt, tags, status,
+              seo_title, seo_description, author, cover_image,
+              published_at, created_at, updated_at
+         FROM posts WHERE id = ?`,
+    )
+    .get(id) as {
+      id: string
+      blog_id: string
+      slug: string
+      title: string
+      body: string
+      excerpt: string | null
+      tags: string
+      status: 'draft' | 'published'
+      seo_title: string | null
+      seo_description: string | null
+      author: string | null
+      cover_image: string | null
+      published_at: string | null
+      created_at: string
+      updated_at: string
+    }
+
+  const post: Post = {
+    id: row.id,
+    blogId: row.blog_id,
+    slug: row.slug,
+    title: row.title,
+    body: row.body,
+    excerpt: row.excerpt ?? undefined,
+    tags: JSON.parse(row.tags) as string[],
+    status: row.status,
+    seoTitle: row.seo_title ?? undefined,
+    seoDescription: row.seo_description ?? undefined,
+    author: row.author ?? undefined,
+    coverImage: row.cover_image ?? undefined,
+    publishedAt: row.published_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+
+  // Render (published only) with compensation on failure
+  if (parsed.status === 'published') {
+    try {
+      renderer.renderPost(blogId, post)
+      renderer.renderBlog(blogId)
+    } catch (renderErr) {
+      try {
+        store.db.prepare('DELETE FROM posts WHERE id = ?').run(id)
+      } catch { /* best-effort; see spec decision #6 */ }
+      throw renderErr
+    }
+    return { post, postUrl: renderer.baseUrl + '/' + post.slug + '/' }
+  }
+
+  return { post }
 }

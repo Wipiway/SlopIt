@@ -1,11 +1,18 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createStore, type Store } from '../src/db/store.js'
 import { createBlog } from '../src/blogs.js'
+import { SlopItError } from '../src/errors.js'
+import { createRenderer } from '../src/rendering/generator.js'
 import { PostInputSchema } from '../src/schema/index.js'
-import { isPostSlugConflict, autoExcerpt, listPublishedPostsForBlog } from '../src/posts.js'
+import {
+  createPost,
+  isPostSlugConflict,
+  autoExcerpt,
+  listPublishedPostsForBlog,
+} from '../src/posts.js'
 
 describe('PostInputSchema', () => {
   it('accepts the minimum well-formed input', () => {
@@ -217,5 +224,230 @@ describe('listPublishedPostsForBlog', () => {
 
     expect(listPublishedPostsForBlog(store, a.id).map((p) => p.slug)).toEqual(['a-post'])
     expect(listPublishedPostsForBlog(store, b.id).map((p) => p.slug)).toEqual(['b-post'])
+  })
+})
+
+describe('createPost', () => {
+  let dir: string
+  let store: Store
+  let outputDir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'slopit-'))
+    store = createStore({ dbPath: join(dir, 'test.db') })
+    outputDir = join(dir, 'out')
+  })
+
+  afterEach(() => {
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  function newRenderer(baseUrl = 'https://test.example.com') {
+    return createRenderer({ store, outputDir, baseUrl })
+  }
+
+  it('creates a published post: DB row, post file, blog index, CSS', () => {
+    const { blog } = createBlog(store, { name: 'my-blog' })
+    const r = newRenderer()
+
+    const { post, postUrl } = createPost(store, r, blog.id, {
+      title: 'Hello World',
+      body: '# Hello\n\nBody text.',
+    })
+
+    expect(post.slug).toBe('hello-world')
+    expect(post.status).toBe('published')
+    expect(post.publishedAt).not.toBeNull()
+    expect(postUrl).toBe('https://test.example.com/hello-world/')
+
+    expect(existsSync(join(outputDir, blog.id, 'hello-world', 'index.html'))).toBe(true)
+    expect(existsSync(join(outputDir, blog.id, 'index.html'))).toBe(true)
+    expect(existsSync(join(outputDir, blog.id, 'style.css'))).toBe(true)
+  })
+
+  it('creates a draft: DB row only, no files, no postUrl', () => {
+    const { blog } = createBlog(store, {})
+    const r = newRenderer()
+
+    const result = createPost(store, r, blog.id, {
+      title: 'Draft post',
+      body: 'Draft body',
+      status: 'draft',
+    })
+
+    expect(result.post.status).toBe('draft')
+    expect(result.post.publishedAt).toBeNull()
+    expect(result.postUrl).toBeUndefined()
+
+    expect(existsSync(join(outputDir, blog.id, 'draft-post'))).toBe(false)
+    expect(existsSync(join(outputDir, blog.id, 'index.html'))).toBe(false)
+  })
+
+  it('honors an explicit custom slug verbatim', () => {
+    const { blog } = createBlog(store, {})
+    const r = newRenderer()
+
+    const { post } = createPost(store, r, blog.id, {
+      title: 'Any title',
+      body: 'x',
+      slug: 'custom-slug',
+    })
+
+    expect(post.slug).toBe('custom-slug')
+  })
+
+  it('persists tags as a JSON array (round-trips)', () => {
+    const { blog } = createBlog(store, {})
+    const r = newRenderer()
+
+    const { post } = createPost(store, r, blog.id, {
+      title: 'Tagged',
+      body: 'x',
+      tags: ['ai', 'content', 'weekly'],
+    })
+
+    expect(post.tags).toEqual(['ai', 'content', 'weekly'])
+
+    const row = store.db.prepare('SELECT tags FROM posts WHERE id = ?').get(post.id) as { tags: string }
+    expect(JSON.parse(row.tags)).toEqual(['ai', 'content', 'weekly'])
+  })
+
+  it('auto-generates an excerpt when none is provided', () => {
+    const { blog } = createBlog(store, {})
+    const r = newRenderer()
+
+    const { post } = createPost(store, r, blog.id, {
+      title: 'Titled',
+      body: '# Hi\n\nThis is the body content that should become an excerpt.',
+    })
+
+    expect(post.excerpt).toBeDefined()
+    expect(post.excerpt).not.toBe('')
+    expect(post.excerpt).toContain('body content')
+  })
+
+  it('uses an explicit excerpt when provided', () => {
+    const { blog } = createBlog(store, {})
+    const r = newRenderer()
+
+    const { post } = createPost(store, r, blog.id, {
+      title: 'T',
+      body: 'anything',
+      excerpt: 'Explicit summary.',
+    })
+
+    expect(post.excerpt).toBe('Explicit summary.')
+  })
+
+  it('throws BLOG_NOT_FOUND (with details.blogId) for a missing blog', () => {
+    const r = newRenderer()
+    let caught: unknown
+    try {
+      createPost(store, r, 'nonexistent', { title: 'T', body: 'x' })
+    } catch (e) { caught = e }
+
+    expect(caught).toBeInstanceOf(SlopItError)
+    expect((caught as SlopItError).code).toBe('BLOG_NOT_FOUND')
+    expect((caught as SlopItError).details).toEqual({ blogId: 'nonexistent' })
+  })
+
+  it('throws POST_SLUG_CONFLICT (with details.slug) on same-blog-same-slug', () => {
+    const { blog } = createBlog(store, {})
+    const r = newRenderer()
+    createPost(store, r, blog.id, { title: 'First', body: 'x', slug: 'taken' })
+
+    let caught: unknown
+    try {
+      createPost(store, r, blog.id, { title: 'Second', body: 'y', slug: 'taken' })
+    } catch (e) { caught = e }
+
+    expect(caught).toBeInstanceOf(SlopItError)
+    expect((caught as SlopItError).code).toBe('POST_SLUG_CONFLICT')
+    expect((caught as SlopItError).details).toEqual({ slug: 'taken' })
+  })
+
+  it('allows the same slug across different blogs (no cross-blog conflict)', () => {
+    const { blog: a } = createBlog(store, { name: 'alpha' })
+    const { blog: b } = createBlog(store, { name: 'beta' })
+    const r = newRenderer()
+
+    createPost(store, r, a.id, { title: 'T', body: 'x', slug: 'shared' })
+    createPost(store, r, b.id, { title: 'T', body: 'y', slug: 'shared' })
+
+    expect(listPublishedPostsForBlog(store, a.id).map((p) => p.slug)).toEqual(['shared'])
+    expect(listPublishedPostsForBlog(store, b.id).map((p) => p.slug)).toEqual(['shared'])
+  })
+
+  it('rejects bad input via Zod (pre-DB)', () => {
+    const { blog } = createBlog(store, {})
+    const r = newRenderer()
+
+    expect(() => createPost(store, r, blog.id, { title: '', body: 'x' })).toThrow()
+    expect(() => createPost(store, r, blog.id, { title: 'a'.repeat(201), body: 'x' })).toThrow()
+    expect(() => createPost(store, r, blog.id, { title: 'T', body: '' })).toThrow()
+  })
+
+  it('compensates by DELETEing the row when render fails', () => {
+    const { blog } = createBlog(store, {})
+    const r = newRenderer()
+
+    // Make the output path a file, so mkdirSync will fail (can't make dir
+    // with that name).
+    writeFileSync(outputDir, 'not a dir')
+
+    let caught: unknown
+    try {
+      createPost(store, r, blog.id, { title: 'T', body: 'x' })
+    } catch (e) { caught = e }
+
+    expect(caught).toBeInstanceOf(Error)
+    expect(caught).not.toBeInstanceOf(SlopItError)
+
+    const count = store.db.prepare('SELECT COUNT(*) AS n FROM posts WHERE blog_id = ?').get(blog.id) as { n: number }
+    expect(count.n).toBe(0)
+  })
+
+  it('returns the full Post shape with created_at and updated_at', () => {
+    const { blog } = createBlog(store, {})
+    const r = newRenderer()
+
+    const { post } = createPost(store, r, blog.id, {
+      title: 'T',
+      body: 'x',
+    })
+
+    expect(typeof post.id).toBe('string')
+    expect(typeof post.createdAt).toBe('string')
+    expect(typeof post.updatedAt).toBe('string')
+    expect(post.blogId).toBe(blog.id)
+  })
+
+  it('passes author / coverImage / seoTitle / seoDescription through to the DB', () => {
+    const { blog } = createBlog(store, {})
+    const r = newRenderer()
+
+    const { post } = createPost(store, r, blog.id, {
+      title: 'T',
+      body: 'x',
+      author: 'Agent 47',
+      coverImage: 'https://example.com/img.png',
+      seoTitle: 'SEO T',
+      seoDescription: 'SEO D',
+    })
+
+    expect(post.author).toBe('Agent 47')
+    expect(post.coverImage).toBe('https://example.com/img.png')
+    expect(post.seoTitle).toBe('SEO T')
+    expect(post.seoDescription).toBe('SEO D')
+  })
+
+  it('blog index includes the newly published post', () => {
+    const { blog } = createBlog(store, { name: 'bb' })
+    const r = newRenderer()
+    createPost(store, r, blog.id, { title: 'First Post', body: 'x' })
+
+    const indexHtml = readFileSync(join(outputDir, blog.id, 'index.html'), 'utf8')
+    expect(indexHtml).toContain('>First Post<')
   })
 })
