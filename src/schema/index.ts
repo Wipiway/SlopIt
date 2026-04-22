@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { generateSlug } from '../ids.js'
 
 // Blog — the top-level container. name is nullable because unnamed /b/:slug
 // blogs are allowed (see strategy: "instant" tier, path-based URLs).
@@ -12,22 +13,37 @@ export type Blog = z.infer<typeof BlogSchema>
 
 // PostInput — what the API/MCP caller provides. The schema is opinionated
 // and fixed in v1; do not grow it without a very good reason.
-export const PostInputSchema = z.object({
-  title: z.string().min(1),
-  slug: z.string().optional(),
-  body: z.string(),
-  excerpt: z.string().optional(),
+const PostInputBaseSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  slug: z
+    .string()
+    .min(2)
+    .max(100)
+    .regex(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/)
+    .optional(),
+  body: z.string().trim().min(1),
+  excerpt: z.string().max(300).optional(),
   tags: z.array(z.string()).default([]),
   status: z.enum(['draft', 'published']).default('published'),
-  seoTitle: z.string().optional(),
-  seoDescription: z.string().optional(),
-  author: z.string().optional(),
+  seoTitle: z.string().max(200).optional(),
+  seoDescription: z.string().max(300).optional(),
+  author: z.string().max(100).optional(),
   coverImage: z.url().optional(),
 })
-export type PostInput = z.infer<typeof PostInputSchema>
+
+export const PostInputSchema = PostInputBaseSchema.superRefine((input, ctx) => {
+  if (input.slug === undefined && generateSlug(input.title) === '') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['title'],
+      message: 'Title must contain slug-compatible characters, or provide an explicit slug',
+    })
+  }
+})
+export type PostInput = z.input<typeof PostInputSchema>
 
 // Post — what core stores and returns.
-export const PostSchema = PostInputSchema.extend({
+export const PostSchema = PostInputBaseSchema.extend({
   id: z.string(),
   blogId: z.string(),
   slug: z.string(),
