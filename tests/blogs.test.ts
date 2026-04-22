@@ -210,3 +210,13 @@ describe('createApiKey', () => {
     expect(count.n).toBe(0)
   })
 })
+
+describe('public barrel exports', () => {
+  it('exposes createBlog, createApiKey, SlopItError, CreateBlogInputSchema', async () => {
+    const mod = await import('../src/index.js')
+    expect(typeof mod.createBlog).toBe('function')
+    expect(typeof mod.createApiKey).toBe('function')
+    expect(typeof mod.SlopItError).toBe('function') // class is callable
+    expect(typeof mod.CreateBlogInputSchema).toBe('object') // Zod schema
+  })
+})

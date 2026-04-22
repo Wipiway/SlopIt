@@ -6,6 +6,11 @@ export type { Store, StoreConfig } from './db/store.js'
 
 export * from './schema/index.js'
 
+export { createBlog, createApiKey } from './blogs.js'
+
+export { SlopItError } from './errors.js'
+export type { SlopItErrorCode } from './errors.js'
+
 // Factories below are stubs for now; wire them up one at a time.
 export { createApiRouter } from './api/index.js'
 export type { ApiRouterConfig } from './api/index.js'
