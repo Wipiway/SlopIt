@@ -54,7 +54,7 @@ Core remains single-blog-scoped: `createPost` takes an already-resolved `blogId`
 | `src/index.ts` | MODIFY | Export `createPost`, `PostInput`, updated types. |
 | `package.json` | MODIFY | Add `&& cp -R src/themes dist/themes` to build script. |
 | `src/themes/README.md` | MODIFY | Update "three themes" references to reflect minimal-only v1. |
-| `ARCHITECTURE.md` | MODIFY | Update line 34 ("Theme system + 3 built-in themes") to reflect minimal-only v1. |
+| `ARCHITECTURE.md` | MODIFY | Two updates: (a) line 34 — "Theme system + 3 built-in themes" → minimal-only v1. (b) Boundary rule #5 ("No `slopit.io` strings in core") — add a narrow, documented exception: the "Powered by SlopIt" footer link. This is the one intentional branding hook in core's themes; platform strips/replaces it per plan (Pro tier). Everything else the rule covers (Stripe keys, Cloudflare tokens, marketing copy, platform env vars) stays forbidden. |
 | `DESIGN.md` | MODIFY | Update line 3 ("three themes it ships") to reflect minimal-only v1. |
 | `tests/posts.test.ts` | NEW | End-to-end createPost tests + `isPostSlugConflict` unit tests. |
 | `tests/posts.id-collision.test.ts` | NEW | Safety-net: `posts.id` PK collision bubbles raw, not as `POST_SLUG_CONFLICT`. |
@@ -73,7 +73,7 @@ export function createPost(
 ): { post: Post; postUrl?: string }
 ```
 
-`postUrl` is set only when `input.status === 'published'`. Drafts return `{ post }`.
+`postUrl` is set only when the **parsed** status is `'published'` (i.e., `parsed.status === 'published'` after `PostInputSchema.parse(input)` runs — which also applies the `'published'` default when the caller omits `status`). Drafts return `{ post }`.
 
 ---
 
@@ -138,11 +138,11 @@ Both methods sync. `renderPost` writes `{outputDir}/{blogId}/{slug}/index.html` 
 5. **DB transaction** `db.transaction(() => { ... })`:
    - Preflight `SELECT 1 FROM posts WHERE blog_id = ? AND slug = ?` — throw `SlopItError('POST_SLUG_CONFLICT', ..., { slug })` if found.
    - `INSERT INTO posts (id, blog_id, slug, title, body, excerpt, tags, status, published_at, seo_title, seo_description, author, cover_image)`. On `isPostSlugConflict(e)`, throw `SlopItError('POST_SLUG_CONFLICT', ..., { slug })`. Other errors bubble raw.
-6. If `status === 'published'`:
+6. If `parsed.status === 'published'`:
    ```ts
    try {
-     renderer.renderPost(blogId, post)
-     renderer.renderBlog(blogId)
+     renderer.renderPost(blogId, post)   // ensureCss runs FIRST inside this call
+     renderer.renderBlog(blogId)         // ensureCss runs FIRST inside this call too
    } catch (renderErr) {
      try { db.prepare('DELETE FROM posts WHERE id = ?').run(id) } catch { /* best-effort */ }
      throw renderErr
@@ -151,6 +151,16 @@ Both methods sync. `renderPost` writes `{outputDir}/{blogId}/{slug}/index.html` 
 7. Return `{ post, postUrl: renderer.baseUrl + '/' + post.slug }`.
 
 **Draft path:** steps 1–5 only. Return `{ post }` (no `postUrl`). `published_at` is null.
+
+### Render sequencing within `renderPost` and `renderBlog`
+
+Both methods call `ensureCss` **before** writing any HTML. This ordering matters for the failure story:
+
+- If CSS copy fails → no HTML is written in this method. Caller catches, compensates via DELETE, clean rollback.
+- If CSS succeeds but HTML write fails → at most the previous method's HTML file exists as an orphan (not linked from an index if the order is post-then-blog; not discoverable via a blog-root visit if renderBlog failed before writing). Caller catches, compensates, throws.
+- If both methods fully succeed → commit is already durable; return with `postUrl`.
+
+This keeps the weakened invariant honest: **we do not expose a post via the blog index while the API call is still in the process of failing**. Orphan post pages at their direct URL (a retry-accessible path, not discoverable from the index) remain acceptable.
 
 ---
 
@@ -341,6 +351,7 @@ export function createRenderer(config: RendererConfig): Renderer {
 
     renderPost(blogId, post) {
       const blog = getBlogInternal(config.store, blogId)    // internal helper in blogs.ts
+      ensureCss(blogId)                                     // BEFORE HTML write — see render sequencing
       const postDir = join(config.outputDir, blogId, post.slug)
       mkdirSync(postDir, { recursive: true })
       const html = render(theme.post, {
@@ -357,11 +368,11 @@ export function createRenderer(config: RendererConfig): Renderer {
         poweredBy: renderPoweredBy(),
       })
       writeFileSync(join(postDir, 'index.html'), html)
-      ensureCss(blogId)
     },
 
     renderBlog(blogId) {
       const blog = getBlogInternal(config.store, blogId)
+      ensureCss(blogId)                                     // BEFORE HTML write
       const posts = listPublishedPostsForBlog(config.store, blogId)
       const blogDir = join(config.outputDir, blogId)
       mkdirSync(blogDir, { recursive: true })
@@ -372,7 +383,6 @@ export function createRenderer(config: RendererConfig): Renderer {
         poweredBy: renderPoweredBy(),
       })
       writeFileSync(join(blogDir, 'index.html'), html)
-      ensureCss(blogId)
     },
   }
 }
