@@ -18,4 +18,20 @@ describe('SlopItError', () => {
     expect(a.code).toBe('BLOG_NAME_CONFLICT')
     expect(b.code).toBe('BLOG_NOT_FOUND')
   })
+
+  it('exposes a details object, defaulting to empty', () => {
+    const e = new SlopItError('BLOG_NAME_CONFLICT', 'oops')
+    expect(e.details).toEqual({})
+  })
+
+  it('carries structured details when provided', () => {
+    const e = new SlopItError('POST_SLUG_CONFLICT', 'slug taken', { slug: 'my-slug' })
+    expect(e.details).toEqual({ slug: 'my-slug' })
+    expect(e.code).toBe('POST_SLUG_CONFLICT')
+  })
+
+  it('supports the POST_SLUG_CONFLICT code', () => {
+    const e = new SlopItError('POST_SLUG_CONFLICT', 'x', { slug: 's' })
+    expect(e.code).toBe('POST_SLUG_CONFLICT')
+  })
 })
