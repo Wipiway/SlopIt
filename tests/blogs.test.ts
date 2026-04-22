@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createStore, type Store } from '../src/db/store.js'
-import { createBlog, isBlogNameConflict } from '../src/blogs.js'
+import { createApiKey, createBlog, isBlogNameConflict } from '../src/blogs.js'
+import { hashApiKey } from '../src/auth/api-key.js'
 import { SlopItError } from '../src/errors.js'
 import { CreateBlogInputSchema } from '../src/schema/index.js'
 
@@ -138,5 +139,74 @@ describe('createBlog', () => {
   it('rejects invalid input via Zod (bad name, too short)', () => {
     expect(() => createBlog(store, { name: 'BadName' })).toThrow()
     expect(() => createBlog(store, { name: 'a' })).toThrow()
+  })
+})
+
+describe('createApiKey', () => {
+  let dir: string
+  let store: Store
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'slopit-'))
+    store = createStore({ dbPath: join(dir, 'test.db') })
+  })
+
+  afterEach(() => {
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('creates a sk_slop_-prefixed plaintext key for an existing blog', () => {
+    const { blog } = createBlog(store, {})
+    const { apiKey } = createApiKey(store, blog.id)
+    expect(apiKey).toMatch(/^sk_slop_/)
+  })
+
+  it('stores the sha256 hash only; plaintext is never persisted', () => {
+    const { blog } = createBlog(store, {})
+    const { apiKey } = createApiKey(store, blog.id)
+
+    const hash = hashApiKey(apiKey)
+    const row = store.db
+      .prepare('SELECT key_hash FROM api_keys WHERE blog_id = ?')
+      .get(blog.id) as { key_hash: string }
+    expect(row.key_hash).toBe(hash)
+
+    // No row where key_hash == plaintext (defense check)
+    const plaintextRows = store.db
+      .prepare('SELECT 1 FROM api_keys WHERE key_hash = ?')
+      .all(apiKey)
+    expect(plaintextRows).toHaveLength(0)
+  })
+
+  it('allows multiple keys per blog (each call mints a new one)', () => {
+    const { blog } = createBlog(store, {})
+    const a = createApiKey(store, blog.id).apiKey
+    const b = createApiKey(store, blog.id).apiKey
+    expect(a).not.toBe(b)
+
+    const count = store.db
+      .prepare('SELECT COUNT(*) AS n FROM api_keys WHERE blog_id = ?')
+      .get(blog.id) as { n: number }
+    expect(count.n).toBe(2)
+  })
+
+  it('throws SlopItError(BLOG_NOT_FOUND) for an unknown blog id', () => {
+    let caught: unknown
+    try {
+      createApiKey(store, 'nonexistent')
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(SlopItError)
+    expect((caught as SlopItError).code).toBe('BLOG_NOT_FOUND')
+  })
+
+  it('leaves no api_keys row behind when the blog does not exist', () => {
+    try { createApiKey(store, 'nonexistent') } catch { /* expected */ }
+    const count = store.db
+      .prepare('SELECT COUNT(*) AS n FROM api_keys')
+      .get() as { n: number }
+    expect(count.n).toBe(0)
   })
 })

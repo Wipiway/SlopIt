@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { generateApiKey, hashApiKey } from './auth/api-key.js'
 import type { Store } from './db/store.js'
 import { SlopItError } from './errors.js'
 import {
@@ -68,4 +69,35 @@ export function createBlog(
   }
 
   return { blog }
+}
+
+export function createApiKey(
+  store: Store,
+  blogId: string,
+): { apiKey: string } {
+  const apiKey = generateApiKey()
+  const keyHash = hashApiKey(apiKey)
+  const id = generateShortId()
+
+  // The FK on api_keys.blog_id already blocks orphan rows, but we do an
+  // explicit existence check so the caller gets SlopItError(BLOG_NOT_FOUND)
+  // instead of a cryptic FOREIGN KEY constraint error.
+  const tx = store.db.transaction(() => {
+    const found = store.db
+      .prepare('SELECT 1 FROM blogs WHERE id = ?')
+      .get(blogId)
+    if (!found) {
+      throw new SlopItError(
+        'BLOG_NOT_FOUND',
+        `Blog "${blogId}" does not exist`,
+      )
+    }
+    store.db
+      .prepare('INSERT INTO api_keys (id, blog_id, key_hash) VALUES (?, ?, ?)')
+      .run(id, blogId, keyHash)
+  })
+
+  tx()
+
+  return { apiKey }
 }
