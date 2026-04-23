@@ -48,8 +48,9 @@ describe('generateSkillFile', () => {
     }
   })
 
-  it('lists all SlopItErrorCode values', () => {
+  it('lists all SlopItErrorCode values plus the envelope codes', () => {
     const codes = [
+      // SlopItErrorCode values
       'BLOG_NAME_CONFLICT',
       'BLOG_NOT_FOUND',
       'POST_SLUG_CONFLICT',
@@ -57,6 +58,9 @@ describe('generateSkillFile', () => {
       'UNAUTHORIZED',
       'IDEMPOTENCY_KEY_CONFLICT',
       'NOT_IMPLEMENTED',
+      // Envelope codes emitted by respondError (not SlopItError)
+      'BAD_REQUEST',
+      'ZOD_VALIDATION',
     ]
     for (const code of codes) expect(text).toContain(code)
   })
@@ -67,6 +71,19 @@ describe('generateSkillFile', () => {
     const section = text.slice(idemStart)
     // Must mention best-effort / crash / retry caveat
     expect(section.toLowerCase()).toMatch(/best-effort|not crash-safe|may re-execute/)
+  })
+
+  it('Idempotency section explicitly states /signup is NOT replayed (drift guard)', () => {
+    // The middleware skips replay when apiKeyHash is empty (see
+    // src/api/idempotency.ts). If SKILL.md claims otherwise, agents
+    // will write retry logic that silently no-ops. Guard the claim.
+    const idemStart = text.indexOf('## Idempotency')
+    const section = text.slice(idemStart)
+    // Must call out /signup specifically, not just mention it
+    expect(section).toMatch(/\/signup is NOT replayed/i)
+    // Must not list /signup in the "authenticated mutation" intro
+    const intro = section.split('\n\n')[1] ?? ''
+    expect(intro).not.toMatch(/POST \/signup/)
   })
 
   it('refers to GET /schema for the machine-readable JSONSchema', () => {

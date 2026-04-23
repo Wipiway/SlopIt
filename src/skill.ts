@@ -46,11 +46,13 @@ Call \`GET /schema\` (full URL: \`${baseUrl}/schema\`) for the machine-readable 
 
 | Code | HTTP | Meaning |
 |---|---|---|
-| BLOG_NAME_CONFLICT | 409 | Blog name taken at signup. Retry with a different name. |
-| BLOG_NOT_FOUND | 404 | Unknown blog id or cross-blog access attempt. |
-| POST_SLUG_CONFLICT | 409 | Slug collision on create. \`details.slug\` tells you the taken slug. |
-| POST_NOT_FOUND | 404 | Unknown post slug. |
+| BAD_REQUEST | 400 | Malformed JSON body. Parse your payload before sending. |
+| ZOD_VALIDATION | 400 | Body parsed but failed schema validation. \`details.issues\` holds the Zod issue list. |
 | UNAUTHORIZED | 401 | Missing or invalid api key. |
+| BLOG_NOT_FOUND | 404 | Unknown blog id or cross-blog access attempt. |
+| POST_NOT_FOUND | 404 | Unknown post slug. |
+| BLOG_NAME_CONFLICT | 409 | Blog name taken at signup. Retry with a different name. |
+| POST_SLUG_CONFLICT | 409 | Slug collision on create. \`details.slug\` tells you the taken slug. |
 | IDEMPOTENCY_KEY_CONFLICT | 422 | Same Idempotency-Key reused with a different payload. |
 | NOT_IMPLEMENTED | 501 | Bug-report stub (platform overrides in production). |
 
@@ -58,11 +60,13 @@ Responses are wrapped: \`{ "error": { "code": "...", "message": "...", "details"
 
 ## Idempotency
 
-Send \`Idempotency-Key: <unique-key>\` on any mutation (POST /signup, POST /posts, PATCH, DELETE) to make retries safe. The key is scoped by \`(method, path, api_key)\` — reuse the same key only for the same logical request.
+Send \`Idempotency-Key: <unique-key>\` on an **authenticated** mutation (POST /blogs/:id/posts, PATCH, DELETE) to make retries safe. The key is scoped by \`(method, path, api_key)\` — reuse the same key only for the same logical request.
 
-**Important caveat — best-effort, not crash-safe.** The server records the response *after* the handler commits. If the server crashes or the response is dropped in that window, a retry with the same key may re-execute the handler instead of replaying the original response. Observable outcomes are bounded:
-- POST /signup with a name → 409 BLOG_NAME_CONFLICT on retry.
-- POST /signup without a name → extra blog may be created.
+**POST /signup is NOT replayed.** Signup has no pre-auth caller identity, so two callers accidentally sharing an Idempotency-Key would both receive the first caller's \`api_key\`. To prevent that leak the server skips storage and replay whenever no api key is present. Retrying /signup re-executes end-to-end:
+- POST /signup with a \`name\` → first call succeeds (200); retry hits 409 BLOG_NAME_CONFLICT. Treat the 200 response as the source of truth and persist the \`api_key\` before retrying.
+- POST /signup without a \`name\` → each retry creates a distinct unnamed blog with a distinct \`api_key\`. Use the response from the first successful call; abandon extras.
+
+**Authenticated mutations — best-effort, not crash-safe.** The server records the response *after* the handler commits. If the server crashes or the response is dropped in that window, a retry with the same key may re-execute the handler instead of replaying the original response. Observable outcomes are bounded:
 - POST /blogs/:id/posts → 409 POST_SLUG_CONFLICT on retry.
 - PATCH → idempotent if the patch is deterministic (true in practice).
 - DELETE → 404 POST_NOT_FOUND on retry.
