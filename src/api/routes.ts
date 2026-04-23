@@ -58,5 +58,13 @@ export function mountRoutes(app: Hono<{ Variables: Vars }>, config: ApiRouterCon
     })
   })
 
-  // Remaining routes land in later tasks (Task 17+)
+  // Read: blog info
+  app.get('/blogs/:id', (c) => {
+    return c.json({
+      blog: c.var.blog,
+      _links: buildLinks(c.var.blog, config),
+    })
+  })
+
+  // Remaining routes land in later tasks (Task 18+)
 }
