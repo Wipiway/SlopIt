@@ -8,7 +8,7 @@ import { SlopItError } from '../errors.js'
 import { createBlog, createApiKey } from '../blogs.js'
 import { generateOnboardingBlock } from '../onboarding.js'
 import { buildLinks } from './links.js'
-import { createPost, getPost, listPosts, updatePost } from '../posts.js'
+import { createPost, deletePost, getPost, listPosts, updatePost } from '../posts.js'
 import { parseMarkdownBody } from './markdown-body.js'
 
 const StatusQuerySchema = z.enum(['draft', 'published']).optional()
@@ -117,5 +117,10 @@ export function mountRoutes(app: Hono<{ Variables: Vars }>, config: ApiRouterCon
     })
   })
 
-  // Remaining routes land in later tasks (Task 21+)
+  // Delete post
+  app.delete('/blogs/:id/posts/:slug', (c) => {
+    const renderer = config.rendererFor(c.var.blog)
+    const result = deletePost(config.store, renderer, c.var.blog.id, c.req.param('slug'))
+    return c.json({ ...result, _links: buildLinks(c.var.blog, config) })
+  })
 }
