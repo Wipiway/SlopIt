@@ -1,5 +1,11 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { generateSkillFile } from '../src/skill.js'
+import { createStore } from '../src/db/store.js'
+import { createRenderer } from '../src/rendering/generator.js'
+import { createApiRouter } from '../src/api/index.js'
 
 describe('generateSkillFile', () => {
   const text = generateSkillFile({ baseUrl: 'https://api.example' })
@@ -71,5 +77,27 @@ describe('generateSkillFile', () => {
     // MCP tools table is intentionally omitted this feature; assert
     // the section heading is not present.
     expect(text).not.toMatch(/## MCP tools/i)
+  })
+})
+
+describe('SKILL.md endpoint parity with createApiRouter', () => {
+  it('every route mounted by createApiRouter appears in the SKILL.md endpoints table', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'slopit-skill-parity-'))
+    const store = createStore({ dbPath: join(dir, 'p.db') })
+    const renderer = createRenderer({ store, outputDir: join(dir, 'out'), baseUrl: 'https://x' })
+    const app = createApiRouter({ store, rendererFor: () => renderer, baseUrl: 'https://api.example' })
+
+    // Extract Hono's routes list. Each has method + path.
+    const routes = app.routes
+      .filter((r) => r.method !== 'ALL')
+      .map((r) => `${r.method} ${r.path}`)
+
+    const skill = generateSkillFile({ baseUrl: 'https://api.example' })
+    for (const route of new Set(routes)) {
+      expect(skill, `SKILL.md missing route ${route}`).toContain(route)
+    }
+
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
   })
 })
