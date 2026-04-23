@@ -42,6 +42,15 @@ export const PostInputSchema = PostInputBaseSchema.superRefine((input, ctx) => {
 })
 export type PostInput = z.input<typeof PostInputSchema>
 
+// Patch schema for updatePost — all PostInput fields become optional,
+// slug is explicitly rejected (use delete+recreate for URL changes; see
+// spec decision #2). No superRefine needed: an empty patch is valid.
+export const PostPatchSchema = PostInputBaseSchema
+  .omit({ slug: true })
+  .partial()
+  .strict()
+export type PostPatchInput = z.input<typeof PostPatchSchema>
+
 // Post — what core stores and returns.
 export const PostSchema = PostInputBaseSchema.extend({
   id: z.string(),
