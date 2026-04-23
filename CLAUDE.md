@@ -125,13 +125,14 @@ A feature without tests isn't done. A feature with 400 lines of mocks is also no
 
 ## Git Flow
 
-Side-project pace. Small scope.
+Side-project pace. Small scope, staged integration.
 
-- `main` is the only long-lived branch.
-- Every change lands via a feature branch + PR → squash merge to `main`. No exceptions, even for single-contributor work, even pre-public — keeps history clean and the review rhythm established before the repo grows.
-- Branch naming: `feat/<short-name>` for features, `fix/<short-name>` for bugs, `chore/<short-name>` for repo hygiene.
-- No `dev` branch, no release branch, no cherry-picking. When we need it, we'll add it.
-- Never force-push `main`. Never rewrite shared history.
+- `main` — release-ready. Future Hetzner deploys cut from here.
+- `dev` — integration branch. All work lands here first.
+- Work branches — `feat/<short-name>`, `fix/<short-name>`, `chore/<short-name>`. Branch from `dev`, PR back to `dev`, squash merge.
+- `dev → main` via PR when ready to cut a release. Not every `dev` merge triggers a `main` release; batching is fine.
+- No direct pushes to `main` or `dev`. No force-pushes. No history rewrites.
+- No cherry-picking across `dev` and `main` — promote a commit by PRing `dev → main`. When we hit a case that needs cherry-picking, we'll add a rule; until then, don't.
 
 ## Writing for Humans and Agents
 
