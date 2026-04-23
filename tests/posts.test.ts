@@ -15,6 +15,7 @@ import {
   getPost,
   listPosts,
   updatePost,
+  deletePost,
 } from '../src/posts.js'
 
 describe('PostInputSchema', () => {
@@ -772,5 +773,76 @@ describe('updatePost', () => {
     spy.mockRestore()
     const row = getPost(store, blogId, post.slug)
     expect(row.title).toBe('Orig') // reverted
+  })
+})
+
+describe('deletePost', () => {
+  let dir: string
+  let store: Store
+  let renderer: ReturnType<typeof createRenderer>
+  let outDir: string
+  let blogId: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'slopit-delete-'))
+    outDir = join(dir, 'out')
+    store = createStore({ dbPath: join(dir, 'test.db') })
+    renderer = createRenderer({ store, outputDir: outDir, baseUrl: 'https://b.example' })
+    blogId = createBlog(store, { name: 'del-blog' }).blog.id
+  })
+
+  afterEach(() => {
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('deletes published post row + files; index omits it; returns {deleted:true}', () => {
+    const { post } = createPost(store, renderer, blogId, { title: 'Gone', body: 'b' })
+    const postDir = join(outDir, blogId, post.slug)
+    const indexFile = join(outDir, blogId, 'index.html')
+    expect(existsSync(postDir)).toBe(true)
+
+    const result = deletePost(store, renderer, blogId, post.slug)
+    expect(result).toEqual({ deleted: true })
+
+    expect(() => getPost(store, blogId, post.slug)).toThrow(
+      expect.objectContaining({ code: 'POST_NOT_FOUND' }),
+    )
+    expect(existsSync(postDir)).toBe(false)
+    expect(readFileSync(indexFile, 'utf8')).not.toContain(post.slug)
+  })
+
+  it('deletes draft post: row gone, no files to clean up', () => {
+    const { post } = createPost(store, renderer, blogId, { title: 'Draft', body: 'b', status: 'draft' })
+    const result = deletePost(store, renderer, blogId, post.slug)
+    expect(result).toEqual({ deleted: true })
+    expect(() => getPost(store, blogId, post.slug)).toThrow(
+      expect.objectContaining({ code: 'POST_NOT_FOUND' }),
+    )
+  })
+
+  it('throws POST_NOT_FOUND for unknown slug', () => {
+    expect(() => deletePost(store, renderer, blogId, 'ghost')).toThrow(
+      expect.objectContaining({ code: 'POST_NOT_FOUND' }),
+    )
+  })
+
+  it('throws BLOG_NOT_FOUND for unknown blog', () => {
+    expect(() => deletePost(store, renderer, 'nope', 'x')).toThrow(
+      expect.objectContaining({ code: 'BLOG_NOT_FOUND' }),
+    )
+  })
+
+  it('on render failure: row still deleted, original error bubbles', () => {
+    const { post } = createPost(store, renderer, blogId, { title: 'T', body: 'b' })
+    const spy = vi.spyOn(renderer, 'renderBlog').mockImplementation(() => {
+      throw new Error('synthetic renderBlog failure')
+    })
+    expect(() => deletePost(store, renderer, blogId, post.slug)).toThrow('synthetic renderBlog failure')
+    spy.mockRestore()
+    // Weakened invariant: row is gone; stale index possible but re-render clears it
+    expect(() => getPost(store, blogId, post.slug)).toThrow(
+      expect.objectContaining({ code: 'POST_NOT_FOUND' }),
+    )
   })
 })

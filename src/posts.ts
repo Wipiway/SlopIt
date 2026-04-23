@@ -494,3 +494,36 @@ export function updatePost(
     ? { post: updated, postUrl: renderer.baseUrl + '/' + updated.slug + '/' }
     : { post: updated }
 }
+
+/**
+ * Hard-delete a post (spec decision #3). DB-first, then render side
+ * effects. Weakened invariant: on render failure the row is gone and
+ * the blog index may be momentarily stale until the next successful
+ * publish/delete re-renders it. File cleanup is ENOENT-tolerant.
+ */
+export function deletePost(
+  store: Store,
+  renderer: MutationRenderer,
+  blogId: string,
+  slug: string,
+): { deleted: true } {
+  getBlogInternal(store, blogId)     // throws BLOG_NOT_FOUND
+  const prior = getPost(store, blogId, slug)  // throws POST_NOT_FOUND
+
+  // DB transaction: DELETE the row
+  const tx = store.db.transaction(() => {
+    store.db.prepare('DELETE FROM posts WHERE blog_id = ? AND slug = ?').run(blogId, slug)
+  })
+  tx()
+
+  // After commit: re-render index (if post was published) + remove files.
+  // `MutationRenderer` requires removePostFiles at the type level — no
+  // optional chaining, no silent skip. Shipped createRenderer implements
+  // it; custom renderers that reach this primitive must provide it too.
+  if (prior.status === 'published') {
+    renderer.renderBlog(blogId)
+  }
+  renderer.removePostFiles(blogId, slug)
+
+  return { deleted: true }
+}
