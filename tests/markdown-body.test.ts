@@ -9,7 +9,7 @@ describe('parseMarkdownBody', () => {
     })
     expect(parsed.title).toBe('Hello')
     expect(parsed.body).toBe('# Hello\n\nBody text.')
-    expect(parsed.status).toBeUndefined()  // default applied by Zod later
+    expect(parsed.status).toBeUndefined() // default applied by Zod later
   })
 
   it('parses all supported query params', () => {
@@ -25,7 +25,8 @@ describe('parseMarkdownBody', () => {
 
   it('splits tags on comma and trims whitespace', () => {
     const parsed = parseMarkdownBody({
-      body: 'b', query: new URLSearchParams({ title: 'T', tags: 'a, b ,c' }),
+      body: 'b',
+      query: new URLSearchParams({ title: 'T', tags: 'a, b ,c' }),
     })
     expect(parsed.tags).toEqual(['a', 'b', 'c'])
   })
@@ -35,7 +36,9 @@ describe('parseMarkdownBody', () => {
   })
 
   it('throws when body is empty', () => {
-    expect(() => parseMarkdownBody({ body: '', query: new URLSearchParams({ title: 'T' }) })).toThrow()
+    expect(() =>
+      parseMarkdownBody({ body: '', query: new URLSearchParams({ title: 'T' }) }),
+    ).toThrow()
   })
 
   it('ignores unknown query params (e.g. seoTitle) silently', () => {

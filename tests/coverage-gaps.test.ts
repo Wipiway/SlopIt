@@ -35,21 +35,25 @@ describe('coverage gaps', () => {
     it('errorMiddleware returns 500 for a non-SlopItError, non-ZodError', async () => {
       const app = new Hono()
       app.onError(errorMiddleware)
-      app.get('/boom', () => { throw new Error('unexpected') })
+      app.get('/boom', () => {
+        throw new Error('unexpected')
+      })
       const res = await app.request('/boom')
       expect(res.status).toBe(500)
-      const body = await res.json() as { error: { code: string } }
+      const body = (await res.json()) as { error: { code: string } }
       expect(body.error.code).toBe('INTERNAL_ERROR')
     })
 
     it('errorMiddleware maps SlopItError with unknown code to 500 via ?? fallback', async () => {
       const { SlopItError } = await import('../src/errors.js')
       // Bypass TypeScript by casting — this exercises the `?? 500` branch in CODE_TO_STATUS lookup
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       const err = new SlopItError('UNKNOWN_CODE' as any, 'test', {})
       const app = new Hono()
       app.onError(errorMiddleware)
-      app.get('/bad-code', () => { throw err })
+      app.get('/bad-code', () => {
+        throw err
+      })
       const res = await app.request('/bad-code')
       expect(res.status).toBe(500)
     })
@@ -92,7 +96,11 @@ describe('coverage gaps', () => {
     it('empty patch on draft post returns { post } with no postUrl', () => {
       const renderer = createRenderer({ store, outputDir: join(dir, 'out'), baseUrl: 'https://x' })
       const { blog } = createBlog(store, { name: 'draftblog' })
-      const { post } = createPost(store, renderer, blog.id, { title: 'T', body: 'B', status: 'draft' })
+      const { post } = createPost(store, renderer, blog.id, {
+        title: 'T',
+        body: 'B',
+        status: 'draft',
+      })
       // Empty patch on a draft — the branch returns { post } without postUrl
       const result = updatePost(store, renderer, blog.id, post.slug, {})
       expect(result.post.slug).toBe(post.slug)
@@ -104,14 +112,22 @@ describe('coverage gaps', () => {
       const { blog } = createBlog(store, { name: 'patchblog' })
       // Create with optional fields set
       const { post } = createPost(store, renderer, blog.id, {
-        title: 'T', body: 'B', status: 'draft',
-        excerpt: 'orig-excerpt', seoTitle: 'orig-seo', seoDescription: 'orig-desc',
-        author: 'orig-author', coverImage: 'https://img.example/orig.jpg',
+        title: 'T',
+        body: 'B',
+        status: 'draft',
+        excerpt: 'orig-excerpt',
+        seoTitle: 'orig-seo',
+        seoDescription: 'orig-desc',
+        author: 'orig-author',
+        coverImage: 'https://img.example/orig.jpg',
       })
       // Patch with explicit optional fields (exercises "in parsed" true branch on each)
       const result = updatePost(store, renderer, blog.id, post.slug, {
-        excerpt: 'new-excerpt', seoTitle: 'new-seo', seoDescription: 'new-desc',
-        author: 'new-author', coverImage: 'https://img.example/new.jpg',
+        excerpt: 'new-excerpt',
+        seoTitle: 'new-seo',
+        seoDescription: 'new-desc',
+        author: 'new-author',
+        coverImage: 'https://img.example/new.jpg',
       })
       expect(result.post.excerpt).toBe('new-excerpt')
       expect(result.post.seoTitle).toBe('new-seo')
@@ -122,9 +138,15 @@ describe('coverage gaps', () => {
       const renderer = createRenderer({ store, outputDir: join(dir, 'out'), baseUrl: 'https://x' })
       const { blog } = createBlog(store, { name: 'optblog' })
       const { post } = createPost(store, renderer, blog.id, {
-        title: 'T', body: 'B', status: 'published',
-        excerpt: 'ex', seoTitle: 'st', seoDescription: 'sd',
-        author: 'a', coverImage: 'https://img.example/c.jpg', tags: ['foo'],
+        title: 'T',
+        body: 'B',
+        status: 'published',
+        excerpt: 'ex',
+        seoTitle: 'st',
+        seoDescription: 'sd',
+        author: 'a',
+        coverImage: 'https://img.example/c.jpg',
+        tags: ['foo'],
       })
       // getPost with optional fields set exercises non-null ?? undefined branches
       const fetched = getPost(store, blog.id, post.slug)
@@ -139,7 +161,9 @@ describe('coverage gaps', () => {
 
   describe('src/api/auth.ts — authMode none with no blog id path', () => {
     it("authMode 'none': route without :id passes through without setting blog", async () => {
-      const app = new Hono<{ Variables: { blog: import('../src/schema/index.js').Blog; apiKeyHash: string } }>()
+      const app = new Hono<{
+        Variables: { blog: import('../src/schema/index.js').Blog; apiKeyHash: string }
+      }>()
       app.onError(errorMiddleware)
       app.use('*', authMiddleware({ store, authMode: 'none' }))
       // Use a path that is NOT in SKIP_PATHS and has no blog :id — hits line 47
@@ -150,7 +174,11 @@ describe('coverage gaps', () => {
 
     it("authMode 'api_key': OPTIONS request skips auth (exercises OPTIONS early-return branch)", async () => {
       const renderer = createRenderer({ store, outputDir: join(dir, 'out'), baseUrl: 'https://x' })
-      const app = createApiRouter({ store, rendererFor: () => renderer, baseUrl: 'https://api.example' })
+      const app = createApiRouter({
+        store,
+        rendererFor: () => renderer,
+        baseUrl: 'https://api.example',
+      })
       const res = await app.request('/health', { method: 'OPTIONS' })
       // OPTIONS passes through auth middleware; no 401
       expect(res.status).not.toBe(401)
@@ -159,7 +187,11 @@ describe('coverage gaps', () => {
 
   describe('src/api/routes.ts — signup with mcpEndpoint', () => {
     it('POST /signup includes mcp_endpoint in response when configured', async () => {
-      const renderer = createRenderer({ store, outputDir: join(dir, 'out'), baseUrl: 'https://b.example' })
+      const renderer = createRenderer({
+        store,
+        outputDir: join(dir, 'out'),
+        baseUrl: 'https://b.example',
+      })
       const app = createApiRouter({
         store,
         rendererFor: () => renderer,
@@ -172,15 +204,23 @@ describe('coverage gaps', () => {
         body: JSON.stringify({ name: 'mcpblog' }),
       })
       expect(res.status).toBe(200)
-      const body = await res.json() as { mcp_endpoint?: string }
+      const body = (await res.json()) as { mcp_endpoint?: string }
       expect(body.mcp_endpoint).toBe('https://api.example/mcp')
     })
   })
 
   describe('src/api/routes.ts — POST /blogs/:id/posts with text/markdown', () => {
     it('creates a post from text/markdown body', async () => {
-      const renderer = createRenderer({ store, outputDir: join(dir, 'out'), baseUrl: 'https://b.example' })
-      const app = createApiRouter({ store, rendererFor: () => renderer, baseUrl: 'https://api.example' })
+      const renderer = createRenderer({
+        store,
+        outputDir: join(dir, 'out'),
+        baseUrl: 'https://b.example',
+      })
+      const app = createApiRouter({
+        store,
+        rendererFor: () => renderer,
+        baseUrl: 'https://api.example',
+      })
       const { blog } = createBlog(store, { name: 'mdblog' })
       const { apiKey } = createApiKey(store, blog.id)
       const res = await app.request(`/blogs/${blog.id}/posts?title=Markdown+Title`, {
@@ -189,7 +229,7 @@ describe('coverage gaps', () => {
         body: 'Some content here.',
       })
       expect(res.status).toBe(200)
-      const body = await res.json() as { post: { title: string } }
+      const body = (await res.json()) as { post: { title: string } }
       expect(body.post.title).toBe('Markdown Title')
     })
   })

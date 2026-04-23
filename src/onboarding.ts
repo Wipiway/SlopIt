@@ -3,10 +3,10 @@ import type { Blog } from './schema/index.js'
 export interface OnboardingInputs {
   blog: Blog
   apiKey: string
-  blogUrl: string              // from rendererFor(blog).baseUrl
-  baseUrl: string              // REST API base
+  blogUrl: string // from rendererFor(blog).baseUrl
+  baseUrl: string // REST API base
   mcpEndpoint?: string
-  schemaUrl: string            // always present — core always ships GET /schema
+  schemaUrl: string // always present — core always ships GET /schema
   dashboardUrl?: string
   docsUrl?: string
   skillUrl?: string
@@ -23,13 +23,23 @@ export interface OnboardingInputs {
  */
 export function generateOnboardingBlock(inputs: OnboardingInputs): string {
   const {
-    blog, apiKey, blogUrl, baseUrl,
-    mcpEndpoint, schemaUrl, dashboardUrl, docsUrl, skillUrl, bugReportUrl,
+    blog,
+    apiKey,
+    blogUrl,
+    baseUrl,
+    mcpEndpoint,
+    schemaUrl,
+    dashboardUrl,
+    docsUrl,
+    skillUrl,
+    bugReportUrl,
   } = inputs
 
   const lines: string[] = []
 
-  lines.push('You have a SlopIt blog. Publish your first post right now to verify everything works.')
+  lines.push(
+    'You have a SlopIt blog. Publish your first post right now to verify everything works.',
+  )
   lines.push('')
   lines.push(`Your blog:   ${blogUrl}`)
   lines.push(`API key:     ${apiKey}`)
@@ -46,7 +56,9 @@ export function generateOnboardingBlock(inputs: OnboardingInputs): string {
   if (mcpEndpoint !== undefined) {
     lines.push('')
     lines.push('  MCP:')
-    lines.push(`    create_post(blog_id="${blog.id}", title="Hello from SlopIt", body="# First post\\n\\nShipped.")`)
+    lines.push(
+      `    create_post(blog_id="${blog.id}", title="Hello from SlopIt", body="# First post\\n\\nShipped.")`,
+    )
   }
 
   lines.push('')

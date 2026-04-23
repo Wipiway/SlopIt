@@ -55,7 +55,9 @@ function extractIdFromRelPath(relPath: string): string | undefined {
  * the path relative to this subapp, so the router works identically
  * whether it is served at root or mounted under a prefix.
  */
-export function authMiddleware(config: Pick<AuthMiddlewareConfig, 'store' | 'authMode'>): MiddlewareHandler<{ Variables: AuthVars }> {
+export function authMiddleware(
+  config: Pick<AuthMiddlewareConfig, 'store' | 'authMode'>,
+): MiddlewareHandler<{ Variables: AuthVars }> {
   return async (c, next) => {
     if (c.req.method === 'OPTIONS') return next()
     const relPath = relativePath(c)
@@ -65,7 +67,7 @@ export function authMiddleware(config: Pick<AuthMiddlewareConfig, 'store' | 'aut
 
     if (config.authMode === 'none') {
       if (idParam === undefined) return next()
-      const blog = getBlogInternal(config.store, idParam)  // throws BLOG_NOT_FOUND
+      const blog = getBlogInternal(config.store, idParam) // throws BLOG_NOT_FOUND
       c.set('blog', blog)
       c.set('apiKeyHash', '')
       return next()
@@ -83,7 +85,9 @@ export function authMiddleware(config: Pick<AuthMiddlewareConfig, 'store' | 'aut
     }
 
     if (idParam !== undefined && idParam !== blog.id) {
-      throw new SlopItError('BLOG_NOT_FOUND', `Blog "${idParam}" does not exist`, { blogId: idParam })
+      throw new SlopItError('BLOG_NOT_FOUND', `Blog "${idParam}" does not exist`, {
+        blogId: idParam,
+      })
     }
 
     c.set('blog', blog)

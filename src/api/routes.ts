@@ -111,7 +111,11 @@ export function mountRoutes(app: Hono<{ Variables: Vars }>, config: ApiRouterCon
   // List posts
   app.get('/blogs/:id/posts', (c) => {
     const status = StatusQuerySchema.parse(c.req.query('status'))
-    const posts = listPosts(config.store, c.var.blog.id, status !== undefined ? { status } : undefined)
+    const posts = listPosts(
+      config.store,
+      c.var.blog.id,
+      status !== undefined ? { status } : undefined,
+    )
     return c.json({ posts, _links: buildLinks(c.var.blog, config) })
   })
 
@@ -127,8 +131,14 @@ export function mountRoutes(app: Hono<{ Variables: Vars }>, config: ApiRouterCon
     // updatePost() re-parses the body via PostPatchSchema.strict(), so
     // the cast here is honest — Zod is the source of truth for shape
     // validation, we only guarantee JSON-parse success at this layer.
-    const raw = await readJsonBodyOptional(c) as PostPatchInput
-    const { post, postUrl } = updatePost(config.store, renderer, c.var.blog.id, c.req.param('slug'), raw)
+    const raw = (await readJsonBodyOptional(c)) as PostPatchInput
+    const { post, postUrl } = updatePost(
+      config.store,
+      renderer,
+      c.var.blog.id,
+      c.req.param('slug'),
+      raw,
+    )
     return c.json({
       post,
       ...(postUrl !== undefined ? { post_url: postUrl } : {}),

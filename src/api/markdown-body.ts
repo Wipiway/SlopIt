@@ -32,7 +32,10 @@ export function parseMarkdownBody(input: { body: string; query: URLSearchParams 
 
   const tagsParam = input.query.get('tags')
   if (tagsParam !== null) {
-    result.tags = tagsParam.split(',').map((t) => t.trim()).filter((t) => t.length > 0)
+    result.tags = tagsParam
+      .split(',')
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0)
   }
 
   return result as PostInput

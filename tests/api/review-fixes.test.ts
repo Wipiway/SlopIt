@@ -15,13 +15,18 @@ import { createBlog, createApiKey } from '../../src/blogs.js'
  *   P2 — malformed JSON silently parsed as empty object
  */
 describe('review fixes', () => {
-  let dir: string; let store: Store
+  let dir: string
+  let store: Store
   let app: ReturnType<typeof createApiRouter>
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'slopit-review-fixes-'))
     store = createStore({ dbPath: join(dir, 'test.db') })
-    const renderer = createRenderer({ store, outputDir: join(dir, 'out'), baseUrl: 'https://blog.example' })
+    const renderer = createRenderer({
+      store,
+      outputDir: join(dir, 'out'),
+      baseUrl: 'https://blog.example',
+    })
     app = createApiRouter({
       store,
       rendererFor: () => renderer,
@@ -58,7 +63,7 @@ describe('review fixes', () => {
         body: JSON.stringify({ name: 'my-blog' }),
       })
       expect(res.status).toBe(200)
-      const body = await res.json() as { blog_id: string; api_key: string }
+      const body = (await res.json()) as { blog_id: string; api_key: string }
       expect(body.blog_id).toBeTruthy()
       expect(body.api_key).toMatch(/^sk_slop_/)
     })
@@ -75,7 +80,7 @@ describe('review fixes', () => {
         headers: { Authorization: `Bearer ${keyA}` },
       })
       expect(res.status).toBe(404)
-      const body = await res.json() as { error: { code: string } }
+      const body = (await res.json()) as { error: { code: string } }
       expect(body.error.code).toBe('BLOG_NOT_FOUND')
     })
   })
@@ -98,7 +103,7 @@ describe('review fixes', () => {
         body: JSON.stringify({ name: 'alpha' }),
       })
       expect(res1.status).toBe(200)
-      const body1 = await res1.json() as { blog_id: string; api_key: string }
+      const body1 = (await res1.json()) as { blog_id: string; api_key: string }
 
       // Second caller — different human, same key + payload (the exact leak scenario)
       const res2 = await app.request('/signup', {
@@ -160,7 +165,7 @@ describe('review fixes', () => {
         },
         body: JSON.stringify({ title: 'Hello', body: 'hi' }),
       })
-      const { post } = await create.json() as { post: { slug: string } }
+      const { post } = (await create.json()) as { post: { slug: string } }
 
       const res = await app.request(`/blogs/${blog.id}/posts/${post.slug}`, {
         method: 'PATCH',
@@ -193,7 +198,7 @@ describe('review fixes', () => {
         },
         body: JSON.stringify({ title: 'Hello', body: 'hi' }),
       })
-      const { post } = await create.json() as { post: { slug: string } }
+      const { post } = (await create.json()) as { post: { slug: string } }
 
       const res = await app.request(`/blogs/${blog.id}/posts/${post.slug}`, {
         method: 'PATCH',

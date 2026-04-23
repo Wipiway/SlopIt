@@ -7,10 +7,15 @@ import { createApiRouter } from '../../src/api/index.js'
 import { createRenderer } from '../../src/rendering/generator.js'
 
 describe('POST /signup', () => {
-  let dir: string; let store: Store
+  let dir: string
+  let store: Store
 
   const makeApp = (bugReportUrl?: string) => {
-    const renderer = createRenderer({ store, outputDir: join(dir, 'out'), baseUrl: 'https://blog.example' })
+    const renderer = createRenderer({
+      store,
+      outputDir: join(dir, 'out'),
+      baseUrl: 'https://blog.example',
+    })
     return createApiRouter({
       store,
       rendererFor: () => renderer,
@@ -40,7 +45,7 @@ describe('POST /signup', () => {
       body: JSON.stringify({ name: 'hello' }),
     })
     expect(res.status).toBe(200)
-    const body = await res.json() as {
+    const body = (await res.json()) as {
       blog_id: string
       blog_url: string
       api_key: string
@@ -57,10 +62,18 @@ describe('POST /signup', () => {
 
   it('returns 409 BLOG_NAME_CONFLICT when the name is taken', async () => {
     const app = makeApp()
-    await app.request('/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'taken' }) })
-    const res = await app.request('/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'taken' }) })
+    await app.request('/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'taken' }),
+    })
+    const res = await app.request('/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'taken' }),
+    })
     expect(res.status).toBe(409)
-    const body = await res.json() as { error: { code: string } }
+    const body = (await res.json()) as { error: { code: string } }
     expect(body.error.code).toBe('BLOG_NAME_CONFLICT')
   })
 
@@ -73,11 +86,19 @@ describe('POST /signup', () => {
     // (409), which is correct: the first call created the blog.
     const app = makeApp()
     const headers = { 'Content-Type': 'application/json', 'Idempotency-Key': 'signup-k1' }
-    const r1 = await app.request('/signup', { method: 'POST', headers, body: JSON.stringify({ name: 'idem' }) })
-    const r2 = await app.request('/signup', { method: 'POST', headers, body: JSON.stringify({ name: 'idem' }) })
+    const r1 = await app.request('/signup', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'idem' }),
+    })
+    const r2 = await app.request('/signup', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'idem' }),
+    })
     expect(r1.status).toBe(200)
     expect(r2.status).toBe(409)
-    const b1 = await r1.json() as { api_key: string }
+    const b1 = (await r1.json()) as { api_key: string }
     const raw2 = await r2.text()
     expect(raw2).not.toContain(b1.api_key)
   })

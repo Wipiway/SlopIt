@@ -58,12 +58,14 @@ describe('authMiddleware', () => {
   const makeApp = (authMode: 'api_key' | 'none') => {
     const renderer = createRenderer({ store, outputDir: join(dir, 'out'), baseUrl: 'https://x' })
     const config = { store, rendererFor: () => renderer, baseUrl: 'https://api.example', authMode }
-    const app = new Hono<{ Variables: { blog: import('../src/schema/index.js').Blog; apiKeyHash: string } }>()
+    const app = new Hono<{
+      Variables: { blog: import('../src/schema/index.js').Blog; apiKeyHash: string }
+    }>()
     app.onError(errorMiddleware)
     app.use('*', authMiddleware(config))
     app.get('/blogs/:id', (c) => c.json({ blogId: c.var.blog.id, hash: c.var.apiKeyHash }))
-    app.get('/signup', (c) => c.json({ ok: true }))       // in skip list
-    app.get('/health', (c) => c.json({ ok: true }))       // in skip list
+    app.get('/signup', (c) => c.json({ ok: true })) // in skip list
+    app.get('/health', (c) => c.json({ ok: true })) // in skip list
     return app
   }
 
@@ -82,7 +84,7 @@ describe('authMiddleware', () => {
     const { blog } = createBlog(store, { name: 'bb' })
     const res = await app.request(`/blogs/${blog.id}`)
     expect(res.status).toBe(401)
-    const body = await res.json() as { error: { code: string } }
+    const body = (await res.json()) as { error: { code: string } }
     expect(body.error.code).toBe('UNAUTHORIZED')
   })
 
@@ -112,7 +114,7 @@ describe('authMiddleware', () => {
       headers: { Authorization: `Bearer ${apiKey}` },
     })
     expect(res.status).toBe(200)
-    const body = await res.json() as { blogId: string; hash: string }
+    const body = (await res.json()) as { blogId: string; hash: string }
     expect(body.blogId).toBe(blog.id)
     expect(body.hash.length).toBeGreaterThan(0)
   })
@@ -127,7 +129,7 @@ describe('authMiddleware', () => {
       headers: { Authorization: `Bearer ${apiKey}` },
     })
     expect(res.status).toBe(404)
-    const body = await res.json() as { error: { code: string } }
+    const body = (await res.json()) as { error: { code: string } }
     expect(body.error.code).toBe('BLOG_NOT_FOUND')
 
     // Sanity: the same response shape as a genuinely-unknown id
@@ -135,7 +137,7 @@ describe('authMiddleware', () => {
       headers: { Authorization: `Bearer ${apiKey}` },
     })
     expect(res2.status).toBe(404)
-    const body2 = await res2.json() as { error: { code: string } }
+    const body2 = (await res2.json()) as { error: { code: string } }
     expect(body2.error.code).toBe('BLOG_NOT_FOUND')
   })
 
@@ -156,7 +158,7 @@ describe('authMiddleware', () => {
     const { blog } = createBlog(store, { name: 'bb' })
     const res = await app.request(`/blogs/${blog.id}`)
     expect(res.status).toBe(200)
-    const body = await res.json() as { blogId: string; hash: string }
+    const body = (await res.json()) as { blogId: string; hash: string }
     expect(body.blogId).toBe(blog.id)
     expect(body.hash).toBe('')
   })

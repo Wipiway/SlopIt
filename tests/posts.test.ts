@@ -650,7 +650,12 @@ describe('listPosts', () => {
   })
 
   it('default returns published only, newest first', () => {
-    createPost(store, renderer, blogId, { title: 'First', body: 'b', slug: 'first', status: 'draft' })
+    createPost(store, renderer, blogId, {
+      title: 'First',
+      body: 'b',
+      slug: 'first',
+      status: 'draft',
+    })
     createPost(store, renderer, blogId, { title: 'Second', body: 'b', slug: 'second' })
     createPost(store, renderer, blogId, { title: 'Third', body: 'b', slug: 'third' })
     const posts = listPosts(store, blogId)
@@ -669,7 +674,7 @@ describe('listPosts', () => {
     expect(listPosts(store, blogId, { status: 'draft' })).toEqual([])
   })
 
-  it('does not leak other blogs\' posts', () => {
+  it("does not leak other blogs' posts", () => {
     const other = createBlog(store, { name: 'other' }).blog
     createPost(store, renderer, other.id, { title: 'Other', body: 'b', slug: 'other-post' })
     expect(listPosts(store, blogId)).toEqual([])
@@ -697,7 +702,11 @@ describe('updatePost', () => {
   })
 
   it('draft→draft: DB changes only, no files written', () => {
-    const { post } = createPost(store, renderer, blogId, { title: 'T1', body: 'b', status: 'draft' })
+    const { post } = createPost(store, renderer, blogId, {
+      title: 'T1',
+      body: 'b',
+      status: 'draft',
+    })
     const postFile = join(outDir, blogId, post.slug, 'index.html')
     expect(existsSync(postFile)).toBe(false)
     const updated = updatePost(store, renderer, blogId, post.slug, { title: 'T2' })
@@ -707,7 +716,11 @@ describe('updatePost', () => {
   })
 
   it('draft→published: writes post + index, sets published_at', () => {
-    const { post } = createPost(store, renderer, blogId, { title: 'Hi', body: 'b', status: 'draft' })
+    const { post } = createPost(store, renderer, blogId, {
+      title: 'Hi',
+      body: 'b',
+      status: 'draft',
+    })
     expect(post.publishedAt).toBeNull()
     const updated = updatePost(store, renderer, blogId, post.slug, { status: 'published' })
     expect(updated.post.status).toBe('published')
@@ -753,7 +766,9 @@ describe('updatePost', () => {
 
   it('rejects slug in the patch (ZodError)', () => {
     const { post } = createPost(store, renderer, blogId, { title: 'P', body: 'b' })
-    expect(() => updatePost(store, renderer, blogId, post.slug, { slug: 'renamed' } as never)).toThrow()
+    expect(() =>
+      updatePost(store, renderer, blogId, post.slug, { slug: 'renamed' } as never),
+    ).toThrow()
   })
 
   it('throws POST_NOT_FOUND for unknown slug', () => {
@@ -813,7 +828,11 @@ describe('deletePost', () => {
   })
 
   it('deletes draft post: row gone, no files to clean up', () => {
-    const { post } = createPost(store, renderer, blogId, { title: 'Draft', body: 'b', status: 'draft' })
+    const { post } = createPost(store, renderer, blogId, {
+      title: 'Draft',
+      body: 'b',
+      status: 'draft',
+    })
     const result = deletePost(store, renderer, blogId, post.slug)
     expect(result).toEqual({ deleted: true })
     expect(() => getPost(store, blogId, post.slug)).toThrow(
@@ -838,7 +857,9 @@ describe('deletePost', () => {
     const spy = vi.spyOn(renderer, 'renderBlog').mockImplementation(() => {
       throw new Error('synthetic renderBlog failure')
     })
-    expect(() => deletePost(store, renderer, blogId, post.slug)).toThrow('synthetic renderBlog failure')
+    expect(() => deletePost(store, renderer, blogId, post.slug)).toThrow(
+      'synthetic renderBlog failure',
+    )
     spy.mockRestore()
     // Weakened invariant: row is gone; stale index possible but re-render clears it
     expect(() => getPost(store, blogId, post.slug)).toThrow(

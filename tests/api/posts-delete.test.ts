@@ -9,9 +9,13 @@ import { createBlog, createApiKey } from '../../src/blogs.js'
 import { createPost } from '../../src/posts.js'
 
 describe('DELETE /blogs/:id/posts/:slug', () => {
-  let dir: string; let store: Store
-  let apiKey: string; let blogId: string; let slug: string
-  let outDir: string; let app: ReturnType<typeof createApiRouter>
+  let dir: string
+  let store: Store
+  let apiKey: string
+  let blogId: string
+  let slug: string
+  let outDir: string
+  let app: ReturnType<typeof createApiRouter>
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'slopit-post-delete-'))
@@ -37,7 +41,7 @@ describe('DELETE /blogs/:id/posts/:slug', () => {
       headers: { Authorization: `Bearer ${apiKey}` },
     })
     expect(res.status).toBe(200)
-    const body = await res.json() as { deleted: boolean; _links: Record<string, string> }
+    const body = (await res.json()) as { deleted: boolean; _links: Record<string, string> }
     expect(body.deleted).toBe(true)
     expect(body._links.view).toBe('https://b.example')
     expect(existsSync(join(outDir, blogId, slug))).toBe(false)

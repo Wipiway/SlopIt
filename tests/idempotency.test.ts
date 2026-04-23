@@ -44,8 +44,16 @@ describe('idempotencyMiddleware', () => {
 
   it('no Idempotency-Key → handler runs every time', async () => {
     const app = makeApp()
-    await app.request('/signup', { method: 'POST', body: '{"a":1}', headers: { 'Content-Type': 'application/json' } })
-    await app.request('/signup', { method: 'POST', body: '{"a":1}', headers: { 'Content-Type': 'application/json' } })
+    await app.request('/signup', {
+      method: 'POST',
+      body: '{"a":1}',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    await app.request('/signup', {
+      method: 'POST',
+      body: '{"a":1}',
+      headers: { 'Content-Type': 'application/json' },
+    })
     expect(callCount).toBe(2)
   })
 
@@ -53,7 +61,11 @@ describe('idempotencyMiddleware', () => {
     const app = makeApp()
     // X-Test-Key-Hash stands in for authenticated caller identity —
     // idempotency requires a caller-bound scope to be safe.
-    const headers = { 'Content-Type': 'application/json', 'Idempotency-Key': 'k1', 'X-Test-Key-Hash': 'h1' }
+    const headers = {
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'k1',
+      'X-Test-Key-Hash': 'h1',
+    }
     const r1 = await app.request('/signup', { method: 'POST', body: '{"a":1}', headers })
     const r2 = await app.request('/signup', { method: 'POST', body: '{"a":1}', headers })
     expect(callCount).toBe(1)
@@ -64,11 +76,15 @@ describe('idempotencyMiddleware', () => {
 
   it('different payload, same key → 422 IDEMPOTENCY_KEY_CONFLICT', async () => {
     const app = makeApp()
-    const headers = { 'Content-Type': 'application/json', 'Idempotency-Key': 'k2', 'X-Test-Key-Hash': 'h1' }
+    const headers = {
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'k2',
+      'X-Test-Key-Hash': 'h1',
+    }
     await app.request('/signup', { method: 'POST', body: '{"a":1}', headers })
     const r = await app.request('/signup', { method: 'POST', body: '{"a":2}', headers })
     expect(r.status).toBe(422)
-    const body = await r.json() as { error: { code: string; details: { key: string } } }
+    const body = (await r.json()) as { error: { code: string; details: { key: string } } }
     expect(body.error.code).toBe('IDEMPOTENCY_KEY_CONFLICT')
     expect(body.error.details.key).toBe('k2')
   })
@@ -84,8 +100,8 @@ describe('idempotencyMiddleware', () => {
     const r1 = await app.request('/signup', { method: 'POST', body: '{"a":1}', headers })
     const r2 = await app.request('/signup', { method: 'POST', body: '{"a":1}', headers })
     expect(callCount).toBe(2)
-    const b1 = await r1.json() as { n: number }
-    const b2 = await r2.json() as { n: number }
+    const b1 = (await r1.json()) as { n: number }
+    const b2 = (await r2.json()) as { n: number }
     expect(b1.n).toBe(1)
     expect(b2.n).toBe(2)
     // And nothing persisted — next test wouldn't see a stale entry.
@@ -95,7 +111,11 @@ describe('idempotencyMiddleware', () => {
 
   it('scope isolation: same key, different path → independent', async () => {
     const app = makeApp()
-    const headers = { 'Content-Type': 'application/json', 'Idempotency-Key': 'shared', 'X-Test-Key-Hash': 'h1' }
+    const headers = {
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'shared',
+      'X-Test-Key-Hash': 'h1',
+    }
     await app.request('/signup', { method: 'POST', body: '{}', headers })
     await app.request('/blogs/b/posts', { method: 'POST', body: '{}', headers })
     expect(callCount).toBe(2)
@@ -104,18 +124,35 @@ describe('idempotencyMiddleware', () => {
   it('scope isolation: same key, different api_key_hash → independent', async () => {
     const app = makeApp()
     const common = { 'Content-Type': 'application/json', 'Idempotency-Key': 'k3' }
-    await app.request('/signup', { method: 'POST', body: '{}', headers: { ...common, 'X-Test-Key-Hash': 'h1' } })
-    await app.request('/signup', { method: 'POST', body: '{}', headers: { ...common, 'X-Test-Key-Hash': 'h2' } })
+    await app.request('/signup', {
+      method: 'POST',
+      body: '{}',
+      headers: { ...common, 'X-Test-Key-Hash': 'h1' },
+    })
+    await app.request('/signup', {
+      method: 'POST',
+      body: '{}',
+      headers: { ...common, 'X-Test-Key-Hash': 'h2' },
+    })
     expect(callCount).toBe(2)
   })
 
   it('does not record non-2xx responses', async () => {
     const app = new Hono<{ Variables: { apiKeyHash: string } }>()
-    app.use('*', async (c, next) => { c.set('apiKeyHash', ''); await next() })
+    app.use('*', async (c, next) => {
+      c.set('apiKeyHash', '')
+      await next()
+    })
     app.use('*', idempotencyMiddleware({ store }))
-    app.post('/fail', () => { throw new Error('boom') })
+    app.post('/fail', () => {
+      throw new Error('boom')
+    })
     const headers = { 'Content-Type': 'application/json', 'Idempotency-Key': 'kfail' }
-    try { await app.request('/fail', { method: 'POST', body: '{}', headers }) } catch { /* ok */ }
+    try {
+      await app.request('/fail', { method: 'POST', body: '{}', headers })
+    } catch {
+      /* ok */
+    }
     // Table should be empty for this key
     const rows = store.db.prepare('SELECT 1 FROM idempotency_keys WHERE key = ?').all('kfail')
     expect(rows).toHaveLength(0)

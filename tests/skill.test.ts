@@ -102,12 +102,14 @@ describe('SKILL.md endpoint parity with createApiRouter', () => {
     const dir = mkdtempSync(join(tmpdir(), 'slopit-skill-parity-'))
     const store = createStore({ dbPath: join(dir, 'p.db') })
     const renderer = createRenderer({ store, outputDir: join(dir, 'out'), baseUrl: 'https://x' })
-    const app = createApiRouter({ store, rendererFor: () => renderer, baseUrl: 'https://api.example' })
+    const app = createApiRouter({
+      store,
+      rendererFor: () => renderer,
+      baseUrl: 'https://api.example',
+    })
 
     // Extract Hono's routes list. Each has method + path.
-    const routes = app.routes
-      .filter((r) => r.method !== 'ALL')
-      .map((r) => `${r.method} ${r.path}`)
+    const routes = app.routes.filter((r) => r.method !== 'ALL').map((r) => `${r.method} ${r.path}`)
 
     const skill = generateSkillFile({ baseUrl: 'https://api.example' })
     for (const route of new Set(routes)) {

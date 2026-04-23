@@ -7,7 +7,8 @@ import { createApiRouter } from '../../src/api/index.js'
 import { createRenderer } from '../../src/rendering/generator.js'
 
 describe('GET /health', () => {
-  let dir: string; let store: Store
+  let dir: string
+  let store: Store
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'slopit-health-'))

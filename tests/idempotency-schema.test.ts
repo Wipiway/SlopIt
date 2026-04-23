@@ -19,9 +19,11 @@ describe('idempotency_keys table', () => {
   })
 
   it('exists with expected columns', () => {
-    const cols = store.db
-      .prepare("PRAGMA table_info('idempotency_keys')")
-      .all() as { name: string; type: string; notnull: number }[]
+    const cols = store.db.prepare("PRAGMA table_info('idempotency_keys')").all() as {
+      name: string
+      type: string
+      notnull: number
+    }[]
     const byName = Object.fromEntries(cols.map((c) => [c.name, c]))
     expect(byName.key).toMatchObject({ type: 'TEXT', notnull: 1 })
     expect(byName.api_key_hash).toMatchObject({ type: 'TEXT', notnull: 1 })

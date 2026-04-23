@@ -112,30 +112,31 @@ export function getPost(store: Store, blogId: string, slug: string): Post {
               published_at, created_at, updated_at
          FROM posts WHERE blog_id = ? AND slug = ?`,
     )
-    .get(blogId, slug) as {
-      id: string
-      blog_id: string
-      slug: string
-      title: string
-      body: string
-      excerpt: string | null
-      tags: string
-      status: 'draft' | 'published'
-      seo_title: string | null
-      seo_description: string | null
-      author: string | null
-      cover_image: string | null
-      published_at: string | null
-      created_at: string
-      updated_at: string
-    } | undefined
+    .get(blogId, slug) as
+    | {
+        id: string
+        blog_id: string
+        slug: string
+        title: string
+        body: string
+        excerpt: string | null
+        tags: string
+        status: 'draft' | 'published'
+        seo_title: string | null
+        seo_description: string | null
+        author: string | null
+        cover_image: string | null
+        published_at: string | null
+        created_at: string
+        updated_at: string
+      }
+    | undefined
 
   if (!row) {
-    throw new SlopItError(
-      'POST_NOT_FOUND',
-      `Post "${slug}" does not exist in blog "${blogId}"`,
-      { blogId, slug },
-    )
+    throw new SlopItError('POST_NOT_FOUND', `Post "${slug}" does not exist in blog "${blogId}"`, {
+      blogId,
+      slug,
+    })
   }
 
   return {
@@ -180,12 +181,22 @@ export function listPosts(
         ORDER BY ${orderBy}`,
     )
     .all(blogId, status) as {
-      id: string; blog_id: string; slug: string; title: string; body: string
-      excerpt: string | null; tags: string; status: 'draft' | 'published'
-      seo_title: string | null; seo_description: string | null
-      author: string | null; cover_image: string | null
-      published_at: string | null; created_at: string; updated_at: string
-    }[]
+    id: string
+    blog_id: string
+    slug: string
+    title: string
+    body: string
+    excerpt: string | null
+    tags: string
+    status: 'draft' | 'published'
+    seo_title: string | null
+    seo_description: string | null
+    author: string | null
+    cover_image: string | null
+    published_at: string | null
+    created_at: string
+    updated_at: string
+  }[]
 
   return rows.map((row) => ({
     id: row.id,
@@ -486,7 +497,11 @@ export function updatePost(
       renderer.removePostFiles(blogId, slug)
     }
   } catch (renderErr) {
-    try { compensate() } catch { /* best-effort; weakened invariant */ }
+    try {
+      compensate()
+    } catch {
+      /* best-effort; weakened invariant */
+    }
     throw renderErr
   }
 
@@ -507,8 +522,8 @@ export function deletePost(
   blogId: string,
   slug: string,
 ): { deleted: true } {
-  getBlogInternal(store, blogId)     // throws BLOG_NOT_FOUND
-  const prior = getPost(store, blogId, slug)  // throws POST_NOT_FOUND
+  getBlogInternal(store, blogId) // throws BLOG_NOT_FOUND
+  const prior = getPost(store, blogId, slug) // throws POST_NOT_FOUND
 
   // DB transaction: DELETE the row
   const tx = store.db.transaction(() => {

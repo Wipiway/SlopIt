@@ -30,9 +30,9 @@ export function isApiKey(value: string): boolean {
 export function verifyApiKey(store: Store, key: string): Blog | null {
   if (!isApiKey(key)) return null
   const hash = hashApiKey(key)
-  const row = store.db
-    .prepare('SELECT blog_id FROM api_keys WHERE key_hash = ?')
-    .get(hash) as { blog_id: string } | undefined
+  const row = store.db.prepare('SELECT blog_id FROM api_keys WHERE key_hash = ?').get(hash) as
+    | { blog_id: string }
+    | undefined
   if (!row) return null
   try {
     return getBlogInternal(store, row.blog_id)

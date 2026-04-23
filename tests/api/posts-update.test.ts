@@ -9,9 +9,13 @@ import { createBlog, createApiKey } from '../../src/blogs.js'
 import { createPost } from '../../src/posts.js'
 
 describe('PATCH /blogs/:id/posts/:slug', () => {
-  let dir: string; let store: Store
-  let apiKey: string; let blogId: string; let slug: string
-  let outDir: string; let app: ReturnType<typeof createApiRouter>
+  let dir: string
+  let store: Store
+  let apiKey: string
+  let blogId: string
+  let slug: string
+  let outDir: string
+  let app: ReturnType<typeof createApiRouter>
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'slopit-post-update-'))
@@ -38,7 +42,11 @@ describe('PATCH /blogs/:id/posts/:slug', () => {
       body: JSON.stringify({ title: 'Edited' }),
     })
     expect(res.status).toBe(200)
-    const body = await res.json() as { post: { title: string }; post_url?: string; _links: Record<string, string> }
+    const body = (await res.json()) as {
+      post: { title: string }
+      post_url?: string
+      _links: Record<string, string>
+    }
     expect(body.post.title).toBe('Edited')
     expect(body.post_url).toMatch(/^https:\/\/b\.example\/.+\/$/)
   })

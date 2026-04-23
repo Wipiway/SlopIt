@@ -31,7 +31,9 @@ type StoredRow = {
  * in /signup's case includes the api_key. Such requests pass through
  * without storage or replay; retrying /signup creates a fresh blog.
  */
-export function idempotencyMiddleware(config: IdempotencyMiddlewareConfig): MiddlewareHandler<{ Variables: { apiKeyHash: string } }> {
+export function idempotencyMiddleware(
+  config: IdempotencyMiddlewareConfig,
+): MiddlewareHandler<{ Variables: { apiKeyHash: string } }> {
   return async (c, next) => {
     if (!APPLIES_TO.has(c.req.method)) return next()
     const key = c.req.header('Idempotency-Key')
@@ -50,7 +52,7 @@ export function idempotencyMiddleware(config: IdempotencyMiddlewareConfig): Midd
       method: c.req.method,
       headers: c.req.raw.headers,
       body: rawBody || undefined,
-    }) as typeof c.req.raw
+    })
     const queryString = [...new URL(c.req.url).searchParams.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([k, v]) => `${k}=${v}`)
