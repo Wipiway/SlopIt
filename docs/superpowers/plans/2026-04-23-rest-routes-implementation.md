@@ -61,7 +61,7 @@ Tests colocate by module: one file per primitive group, one file per middleware,
 
 ## Deviations from spec (minor)
 
-1. **`Renderer` interface gains an OPTIONAL `removePostFiles?(blogId, slug): void` method** (Task 5.4). The spec's Files table didn't list `src/rendering/generator.ts` as modified, but `updatePost` (pub→draft) and `deletePost` both need to delete post files. Encapsulating the path logic inside the renderer is cleaner than exposing `outputDir` publicly. **Optional** (not required) — this is a backwards-compatible addition: existing consumers (createPost) are unaffected, and any hypothetical custom Renderer implementations that don't need disk cleanup can omit the method. Callers use `renderer.removePostFiles?.(…)`.
+1. **New `MutationRenderer` interface extends `Renderer`** (Task 5.4). The spec's Files table didn't list `src/rendering/generator.ts` as modified, but `updatePost` (pub→draft) and `deletePost` both need to delete post files. Solution: `Renderer` stays as-is (3 methods — unchanged public contract for `createPost`); a new `MutationRenderer extends Renderer` adds a **required** `removePostFiles(blogId, slug): void`. `updatePost` and `deletePost` take `MutationRenderer`; `ApiRouterConfig.rendererFor` returns `MutationRenderer`; shipped `createRenderer` returns `MutationRenderer`. This is type-safe (no compile without the method) AND backwards-compatible (existing `Renderer` consumers are untouched). Earlier rounds tried "required on Renderer" (breaking) and "optional on Renderer" (silent skip) — both rejected in review; `MutationRenderer` is the resolution.
 2. **Task 3 adds a small `tests/idempotency-schema.test.ts`** (not called out in the spec's test list). It verifies the migration landed correctly before Task 13 depends on it.
 3. **Task 2 uses `.strict()` on `PostPatchSchema`** to reject `slug` (and any other unknown keys) — the spec says "slug is immutable", `.strict()` is the cleanest Zod mechanism to enforce that at parse time.
 
@@ -799,7 +799,7 @@ Then add at the bottom of `src/posts.ts`:
  */
 export function updatePost(
   store: Store,
-  renderer: Renderer,
+  renderer: MutationRenderer,
   blogId: string,
   slug: string,
   patch: PostPatchInput,
@@ -918,7 +918,7 @@ export function updatePost(
       // a successful renderBlog, the orphan file is tolerable per spec
       // (it 404s on the direct URL but isn't in the index).
       renderer.renderBlog(blogId)
-      renderer.removePostFiles?.(blogId, slug)
+      renderer.removePostFiles(blogId, slug)
     }
   } catch (renderErr) {
     try { compensate() } catch { /* best-effort; weakened invariant */ }
@@ -931,13 +931,13 @@ export function updatePost(
 }
 ```
 
-The `renderer.removePostFiles?.(blogId, slug)` call uses optional chaining because the method is **optional** on the `Renderer` interface (see Step 5.4). Shipped `createRenderer` implements it; a consumer providing a custom Renderer without disk output can omit it safely.
+The `renderer.removePostFiles(blogId, slug)` call is a **required** method on `MutationRenderer` — the narrower type `updatePost` takes (see Step 5.4). TypeScript enforces at compile time that any renderer threaded into a mutation primitive provides file cleanup. No optional chaining. No silent skip.
 
-- [ ] **Step 5.4: Add optional `removePostFiles` to the Renderer interface**
+- [ ] **Step 5.4: Add `MutationRenderer` — a narrower interface for mutation primitives**
 
-The current `Renderer` in `src/rendering/generator.ts` exposes only `baseUrl`, `renderPost`, `renderBlog`. Adding an **optional** method avoids breaking type-compatible custom renderers (dev P2 review).
+`Renderer` stays as-is (three methods: `baseUrl`, `renderPost`, `renderBlog`) — unchanged public contract for `createPost`. `MutationRenderer extends Renderer` adds `removePostFiles` as a **required** method. `createRenderer` returns `MutationRenderer`. `updatePost` and `deletePost` take `MutationRenderer`. This is type-safe (no compile without the method) AND backwards-compatible (Renderer consumers are untouched).
 
-Open `src/rendering/generator.ts` and locate the `Renderer` interface (near the top):
+Open `src/rendering/generator.ts`. Near the top, the existing `Renderer` interface stays unchanged:
 
 ```ts
 export interface Renderer {
@@ -945,27 +945,43 @@ export interface Renderer {
   renderPost(blogId: string, post: Post): void
   renderBlog(blogId: string): void
 }
+```
+
+Add, directly below it:
+
+```ts
+/**
+ * Renderer contract for the mutation primitives (updatePost, deletePost).
+ * Extends Renderer with the file-cleanup hook they require to preserve
+ * the spec's success invariant (rendered files match post-call state).
+ * Shipped `createRenderer` returns MutationRenderer. Consumers who
+ * implement a custom Renderer (e.g., object-storage instead of disk)
+ * must extend it to MutationRenderer before passing to update/delete.
+ */
+export interface MutationRenderer extends Renderer {
+  /**
+   * Remove the post directory for (blogId, slug). ENOENT-tolerant —
+   * a missing directory is the desired end state and should not throw.
+   * Hard I/O failures (EACCES, EIO) SHOULD throw so callers can apply
+   * compensation.
+   */
+  removePostFiles(blogId: string, slug: string): void
+}
+```
+
+Change the `createRenderer` factory's return type. Locate:
+
+```ts
+export function createRenderer(config: RendererConfig): Renderer {
 ```
 
 Change to:
 
 ```ts
-export interface Renderer {
-  readonly baseUrl: string
-  renderPost(blogId: string, post: Post): void
-  renderBlog(blogId: string): void
-  /**
-   * Optional. Remove the post directory for (blogId, slug). Shipped
-   * `createRenderer` implements this; custom Renderer implementations
-   * (e.g., one that uploads to object storage instead of local disk)
-   * may omit it. ENOENT-tolerant when implemented. Callers in
-   * updatePost / deletePost use optional chaining.
-   */
-  removePostFiles?(blogId: string, slug: string): void
-}
+export function createRenderer(config: RendererConfig): MutationRenderer {
 ```
 
-Then in the `createRenderer` factory inside the same file, locate the `return { baseUrl, renderPost, renderBlog }` block and extend it:
+Locate the `return { baseUrl, renderPost, renderBlog }` block at the end of the factory and extend it:
 
 ```ts
   return {
@@ -978,11 +994,31 @@ Then in the `createRenderer` factory inside the same file, locate the `return { 
   }
 ```
 
-Add `rmSync` to the existing `node:fs` import at the top of the file if not already present.
+Add `rmSync` to the existing `node:fs` import at the top of the file if not already present. `rmSync` with `{ recursive: true, force: true }` is ENOENT-tolerant by design — a missing directory succeeds silently.
 
-- [ ] **Step 5.5: Confirm updatePost uses the optional method correctly**
+- [ ] **Step 5.5: Update `updatePost` signature to use `MutationRenderer`**
 
-Step 5.3 already uses `renderer.removePostFiles?.(blogId, slug)` with optional chaining. No further code changes in `src/posts.ts` for this step — just verify there are no stray `rmSync`/`join` imports added by the earlier coercion (there shouldn't be; Step 5.3 never introduced them in the final form).
+In `src/posts.ts`, update the import near the top that brings in the renderer type:
+
+```ts
+import type { Renderer, MutationRenderer } from './rendering/generator.js'
+```
+
+Change the `updatePost` function signature in the code written in Step 5.3:
+
+```ts
+export function updatePost(
+  store: Store,
+  renderer: MutationRenderer,     // ← changed from Renderer
+  blogId: string,
+  slug: string,
+  patch: PostPatchInput,
+): { post: Post; postUrl?: string }
+```
+
+The body is unchanged — the `renderer.removePostFiles(blogId, slug)` call in the pub→draft branch (no optional chaining) is already correct under the stricter type.
+
+Verify: no stray `rmSync`/`join` imports in `src/posts.ts` from the earlier coercion. (Step 5.3 never introduced them in the final form — this is a sanity check.)
 
 - [ ] **Step 5.6: Verify**
 
@@ -1099,7 +1135,7 @@ Append to `src/posts.ts`:
  */
 export function deletePost(
   store: Store,
-  renderer: Renderer,
+  renderer: MutationRenderer,
   blogId: string,
   slug: string,
 ): { deleted: true } {
@@ -1113,12 +1149,13 @@ export function deletePost(
   tx()
 
   // After commit: re-render index (if post was published) + remove files.
-  // Optional chaining: shipped createRenderer implements removePostFiles;
-  // custom renderers without disk output may omit it.
+  // `MutationRenderer` requires removePostFiles at the type level — no
+  // optional chaining, no silent skip. Shipped createRenderer implements
+  // it; custom renderers that reach this primitive must provide it too.
   if (prior.status === 'published') {
     renderer.renderBlog(blogId)
   }
-  renderer.removePostFiles?.(blogId, slug)
+  renderer.removePostFiles(blogId, slug)
 
   return { deleted: true }
 }
@@ -1702,7 +1739,6 @@ const makeRenderer = (baseUrl: string): Renderer => ({
   baseUrl,
   renderPost: () => {},
   renderBlog: () => {},
-  removePostFiles: () => {},
 })
 
 describe('buildLinks', () => {
@@ -2672,7 +2708,7 @@ Replace the contents of `src/api/index.ts`:
 ```ts
 import { Hono } from 'hono'
 import type { Store } from '../db/store.js'
-import type { Renderer } from '../rendering/generator.js'
+import type { MutationRenderer } from '../rendering/generator.js'
 import type { Blog } from '../schema/index.js'
 import { errorMiddleware } from './errors.js'
 import { authMiddleware } from './auth.js'
@@ -2681,7 +2717,13 @@ import { mountRoutes } from './routes.js'
 
 export interface ApiRouterConfig {
   store: Store
-  rendererFor: (blog: Blog) => Renderer
+  /**
+   * Per-blog renderer. MUST return a MutationRenderer (not just a
+   * Renderer) so mutation primitives (updatePost, deletePost) have
+   * file-cleanup available. Shipped `createRenderer` returns
+   * MutationRenderer; see spec decision #19 + plan Task 5.4.
+   */
+  rendererFor: (blog: Blog) => MutationRenderer
   baseUrl: string
   authMode?: 'api_key' | 'none'
   mcpEndpoint?: string
@@ -3593,7 +3635,7 @@ export type { SlopItErrorCode } from './errors.js'
 
 // Rendering
 export { createRenderer } from './rendering/generator.js'
-export type { Renderer, RendererConfig } from './rendering/generator.js'
+export type { Renderer, MutationRenderer, RendererConfig } from './rendering/generator.js'
 
 // REST router factory
 export { createApiRouter } from './api/index.js'
@@ -3645,13 +3687,13 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createStore, type Store } from '../../src/db/store.js'
 import { createApiRouter } from '../../src/api/index.js'
-import { createRenderer, type Renderer } from '../../src/rendering/generator.js'
+import { createRenderer, type MutationRenderer } from '../../src/rendering/generator.js'
 import { createBlog, createApiKey } from '../../src/blogs.js'
 import type { Blog } from '../../src/schema/index.js'
 
 describe('rendererFor(blog): no cross-blog URL leakage', () => {
   let dir: string; let store: Store
-  let renderers: Map<string, Renderer>
+  let renderers: Map<string, MutationRenderer>
   let app: ReturnType<typeof createApiRouter>
 
   beforeEach(() => {
