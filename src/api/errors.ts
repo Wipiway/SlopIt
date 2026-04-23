@@ -1,4 +1,5 @@
-import type { Context, MiddlewareHandler } from 'hono'
+import type { Context } from 'hono'
+import type { ErrorHandler } from 'hono/types'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { ZodError } from 'zod'
 import { SlopItError, type SlopItErrorCode } from '../errors.js'
@@ -26,14 +27,12 @@ type ErrorBody = {
  * ZodError → 400 with details.issues. SlopItError → mapped status with
  * code + details. Anything else → 500 with a generic message (full
  * error is logged to stderr via console.error for the consumer to pick up).
+ *
+ * Register via app.onError(errorMiddleware) — Hono's compose intercepts
+ * thrown errors before they can propagate through middleware try/catch.
  */
-export const errorMiddleware: MiddlewareHandler = async (c, next) => {
-  try {
-    await next()
-  } catch (err) {
-    const res = respondError(c, err)
-    c.res = res
-  }
+export const errorMiddleware: ErrorHandler = (err, c) => {
+  return respondError(c, err)
 }
 
 export function respondError(c: Context, err: unknown): Response {
