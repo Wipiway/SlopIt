@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createStore, type Store } from '../src/db/store.js'
-import { createApiKey, createBlog, isBlogNameConflict } from '../src/blogs.js'
+import { createApiKey, createBlog, isBlogNameConflict, getBlogInternal } from '../src/blogs.js'
 import { hashApiKey } from '../src/auth/api-key.js'
 import { SlopItError } from '../src/errors.js'
 import { CreateBlogInputSchema } from '../src/schema/index.js'
@@ -53,10 +53,13 @@ describe('CreateBlogInputSchema', () => {
     }
   })
 
-  it('accepts all three valid themes', () => {
-    for (const theme of ['minimal', 'classic', 'zine'] as const) {
-      expect(CreateBlogInputSchema.parse({ theme }).theme).toBe(theme)
-    }
+  it('accepts the minimal theme', () => {
+    expect(CreateBlogInputSchema.parse({ theme: 'minimal' }).theme).toBe('minimal')
+  })
+
+  it('rejects classic and zine (narrowed to minimal-only in v1)', () => {
+    expect(() => CreateBlogInputSchema.parse({ theme: 'classic' })).toThrow()
+    expect(() => CreateBlogInputSchema.parse({ theme: 'zine' })).toThrow()
   })
 
   it('rejects invalid theme', () => {
@@ -113,8 +116,8 @@ describe('createBlog', () => {
   })
 
   it('creates a blog with an explicit theme', () => {
-    const { blog } = createBlog(store, { theme: 'zine' })
-    expect(blog.theme).toBe('zine')
+    const { blog } = createBlog(store, { theme: 'minimal' })
+    expect(blog.theme).toBe('minimal')
   })
 
   it('generates a different id on each call', () => {
@@ -218,5 +221,46 @@ describe('public barrel exports', () => {
     expect(typeof mod.createApiKey).toBe('function')
     expect(typeof mod.SlopItError).toBe('function') // class is callable
     expect(typeof mod.CreateBlogInputSchema).toBe('object') // Zod schema
+  })
+})
+
+describe('getBlogInternal', () => {
+  let dir: string
+  let store: Store
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'slopit-'))
+    store = createStore({ dbPath: join(dir, 'test.db') })
+  })
+
+  afterEach(() => {
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('returns a named blog', () => {
+    const { blog } = createBlog(store, { name: 'ai-thoughts' })
+    const fetched = getBlogInternal(store, blog.id)
+    expect(fetched.id).toBe(blog.id)
+    expect(fetched.name).toBe('ai-thoughts')
+    expect(fetched.theme).toBe('minimal')
+  })
+
+  it('returns an unnamed blog', () => {
+    const { blog } = createBlog(store, {})
+    const fetched = getBlogInternal(store, blog.id)
+    expect(fetched.name).toBeNull()
+  })
+
+  it('throws SlopItError(BLOG_NOT_FOUND) when the id does not exist', () => {
+    let caught: unknown
+    try {
+      getBlogInternal(store, 'nonexistent')
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(SlopItError)
+    expect((caught as SlopItError).code).toBe('BLOG_NOT_FOUND')
+    expect((caught as SlopItError).details).toEqual({ blogId: 'nonexistent' })
   })
 })
