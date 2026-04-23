@@ -61,9 +61,13 @@ Tests colocate by module: one file per primitive group, one file per middleware,
 
 ## Deviations from spec (minor)
 
-1. **`Renderer` interface gains `removePostFiles(blogId, slug): void`** (Task 5.4). The spec's Files table didn't list `src/rendering/generator.ts` as modified, but `updatePost` (pub→draft transition) and `deletePost` both need to delete post files. The clean answer is to encapsulate the path logic inside the renderer — the alternative is exposing `renderer.outputDir` publicly, which is worse. This is an **additive** interface change: existing consumers (createPost) are unaffected; shipped `createRenderer` grows one method. File ops are ENOENT-tolerant per the spec.
+1. **`Renderer` interface gains an OPTIONAL `removePostFiles?(blogId, slug): void` method** (Task 5.4). The spec's Files table didn't list `src/rendering/generator.ts` as modified, but `updatePost` (pub→draft) and `deletePost` both need to delete post files. Encapsulating the path logic inside the renderer is cleaner than exposing `outputDir` publicly. **Optional** (not required) — this is a backwards-compatible addition: existing consumers (createPost) are unaffected, and any hypothetical custom Renderer implementations that don't need disk cleanup can omit the method. Callers use `renderer.removePostFiles?.(…)`.
 2. **Task 3 adds a small `tests/idempotency-schema.test.ts`** (not called out in the spec's test list). It verifies the migration landed correctly before Task 13 depends on it.
 3. **Task 2 uses `.strict()` on `PostPatchSchema`** to reject `slug` (and any other unknown keys) — the spec says "slug is immutable", `.strict()` is the cleanest Zod mechanism to enforce that at parse time.
+
+## Plan-level precision beyond the spec
+
+- **updatePost published→draft ordering** is `renderBlog` → `removePostFiles`. The spec states the invariant ("compensation must leave no durable change") but doesn't prescribe the sequence. This ordering is the only one that preserves the invariant: if `renderBlog` fails mid-transition, DB compensation rolls status back to 'published' and the post files still exist → consistent pre-call state. If file cleanup fails after a successful `renderBlog`, the orphan file is explicitly allowed by spec decision #20.
 
 ---
 
@@ -906,12 +910,15 @@ export function updatePost(
       renderer.renderPost(blogId, updated)
       renderer.renderBlog(blogId)
     } else if (oldStatus === 'published' && newStatus === 'draft') {
-      // Remove post files
-      rmSync(join((renderer as unknown as { outputDir?: string }).outputDir ?? '', blogId, slug), {
-        recursive: true,
-        force: true,
-      })
+      // IMPORTANT ordering (P1 fix): renderBlog FIRST. It reads the DB
+      // where status is now 'draft', so the post is excluded from the
+      // index. Then delete the post files. If renderBlog fails, the
+      // catch compensates (DB back to 'published') and files still
+      // exist → consistent pre-call state. If file deletion fails after
+      // a successful renderBlog, the orphan file is tolerable per spec
+      // (it 404s on the direct URL but isn't in the index).
       renderer.renderBlog(blogId)
+      renderer.removePostFiles?.(blogId, slug)
     }
   } catch (renderErr) {
     try { compensate() } catch { /* best-effort; weakened invariant */ }
@@ -924,11 +931,11 @@ export function updatePost(
 }
 ```
 
-Note the `rmSync` import and the `(renderer as unknown as { outputDir?: string }).outputDir` coercion are hacks — we need the renderer's outputDir to delete files. Fix in the next step.
+The `renderer.removePostFiles?.(blogId, slug)` call uses optional chaining because the method is **optional** on the `Renderer` interface (see Step 5.4). Shipped `createRenderer` implements it; a consumer providing a custom Renderer without disk output can omit it safely.
 
-- [ ] **Step 5.4: Expose outputDir on the Renderer interface**
+- [ ] **Step 5.4: Add optional `removePostFiles` to the Renderer interface**
 
-The current `Renderer` in `src/rendering/generator.ts` exposes only `baseUrl`, `renderPost`, `renderBlog`. To cleanly remove a post's files, add a `removePostFiles` method (keeps the file-ops encapsulated in the renderer).
+The current `Renderer` in `src/rendering/generator.ts` exposes only `baseUrl`, `renderPost`, `renderBlog`. Adding an **optional** method avoids breaking type-compatible custom renderers (dev P2 review).
 
 Open `src/rendering/generator.ts` and locate the `Renderer` interface (near the top):
 
@@ -947,8 +954,14 @@ export interface Renderer {
   readonly baseUrl: string
   renderPost(blogId: string, post: Post): void
   renderBlog(blogId: string): void
-  /** Remove the post directory for (blogId, slug). ENOENT-tolerant. */
-  removePostFiles(blogId: string, slug: string): void
+  /**
+   * Optional. Remove the post directory for (blogId, slug). Shipped
+   * `createRenderer` implements this; custom Renderer implementations
+   * (e.g., one that uploads to object storage instead of local disk)
+   * may omit it. ENOENT-tolerant when implemented. Callers in
+   * updatePost / deletePost use optional chaining.
+   */
+  removePostFiles?(blogId: string, slug: string): void
 }
 ```
 
@@ -967,24 +980,9 @@ Then in the `createRenderer` factory inside the same file, locate the `return { 
 
 Add `rmSync` to the existing `node:fs` import at the top of the file if not already present.
 
-- [ ] **Step 5.5: Use the new method in updatePost**
+- [ ] **Step 5.5: Confirm updatePost uses the optional method correctly**
 
-Back in `src/posts.ts`, in the `try` block of `updatePost`, replace:
-
-```ts
-      rmSync(join((renderer as unknown as { outputDir?: string }).outputDir ?? '', blogId, slug), {
-        recursive: true,
-        force: true,
-      })
-```
-
-with:
-
-```ts
-      renderer.removePostFiles(blogId, slug)
-```
-
-Also remove any `rmSync` / `join` imports that were only needed by the coercion in Step 5.3 (keep ones still in use — `join` is already used by other code).
+Step 5.3 already uses `renderer.removePostFiles?.(blogId, slug)` with optional chaining. No further code changes in `src/posts.ts` for this step — just verify there are no stray `rmSync`/`join` imports added by the earlier coercion (there shouldn't be; Step 5.3 never introduced them in the final form).
 
 - [ ] **Step 5.6: Verify**
 
@@ -1114,11 +1112,13 @@ export function deletePost(
   })
   tx()
 
-  // After commit: re-render index (if post was published) + remove files
+  // After commit: re-render index (if post was published) + remove files.
+  // Optional chaining: shipped createRenderer implements removePostFiles;
+  // custom renderers without disk output may omit it.
   if (prior.status === 'published') {
     renderer.renderBlog(blogId)
   }
-  renderer.removePostFiles(blogId, slug)
+  renderer.removePostFiles?.(blogId, slug)
 
   return { deleted: true }
 }
@@ -3664,7 +3664,10 @@ describe('rendererFor(blog): no cross-blog URL leakage', () => {
       rendererFor: (blog: Blog) => {
         const cached = renderers.get(blog.id)
         if (cached) return cached
-        const outDir = join(dir, 'out', blog.id)
+        // NOTE: createRenderer nests output under {outputDir}/{blogId}/
+        // internally — pass the shared parent here, not a per-blog subdir.
+        // Per-blog differentiation is baseUrl, not outputDir.
+        const outDir = join(dir, 'out')
         const url = blog.name === 'alpha' ? 'https://alpha.example' : 'https://beta.example'
         const r = createRenderer({ store, outputDir: outDir, baseUrl: url })
         renderers.set(blog.id, r)
