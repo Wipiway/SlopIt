@@ -288,6 +288,129 @@ describe('renderMarkdown — HTML stripping (v1 XSS defense)', () => {
     expect(out).toContain('alert(1)')
     expect(out).toContain('&lt;/script&gt;')
   })
+
+  it('strips <style> blocks entirely (including payload)', () => {
+    const out = renderMarkdown('<style>body{background:red}</style>')
+    expect(out).not.toContain('<style>')
+    expect(out).not.toContain('background:red')
+  })
+
+  it('neutralizes <svg> with event handlers + embedded <script>', () => {
+    const out = renderMarkdown('<svg onload=alert(1)><script>evil()</script></svg>')
+    // The embedded <script>...</script> is stripped by the preprocess pass.
+    expect(out).not.toContain('evil()')
+    // The remaining <svg> tags are dropped by the renderer.html override.
+    expect(out).not.toContain('<svg')
+    expect(out).not.toContain('onload')
+    expect(out).not.toContain('alert(1)')
+  })
+})
+
+describe('renderMarkdown — URL scheme allowlist (v1 XSS defense, part 2)', () => {
+  // Background: marked v18 no longer blocks javascript: hrefs. Markdown
+  // [text](url) is a `link` token, not an `html` token, so the
+  // renderer.html override and stripDangerousBlocks preprocess do not
+  // intercept it. An allowlist in the link/image renderer is the fix.
+
+  it('blocks javascript: in markdown link hrefs', () => {
+    const out = renderMarkdown('[click me](javascript:alert(1))')
+    expect(out).not.toContain('javascript:')
+    expect(out).not.toContain('<a')   // no anchor at all
+    expect(out).toContain('click me') // visible text preserved
+  })
+
+  it('blocks data: in markdown link hrefs', () => {
+    const out = renderMarkdown('[payload](data:text/html,<script>alert(1)</script>)')
+    expect(out).not.toContain('data:')
+    expect(out).not.toContain('<a')
+    expect(out).toContain('payload')
+  })
+
+  it('blocks vbscript: in markdown link hrefs', () => {
+    const out = renderMarkdown('[old](vbscript:msgbox(1))')
+    expect(out).not.toContain('vbscript:')
+    expect(out).not.toContain('<a')
+    expect(out).toContain('old')
+  })
+
+  it('blocks file: in markdown link hrefs', () => {
+    const out = renderMarkdown('[local](file:///etc/passwd)')
+    expect(out).not.toContain('file:')
+    expect(out).not.toContain('<a')
+    expect(out).toContain('local')
+  })
+
+  it('is case-insensitive on scheme matching', () => {
+    expect(renderMarkdown('[x](JavaScript:alert(1))')).not.toContain('JavaScript:')
+    expect(renderMarkdown('[x](JAVASCRIPT:alert(1))')).not.toContain('JAVASCRIPT:')
+    expect(renderMarkdown('[x](DATA:text/html,xss)')).not.toContain('DATA:')
+  })
+
+  it('strips data: src in markdown images', () => {
+    // Use a clean data URL so marked parses it as an image; the payload
+    // example with embedded <svg> would be rejected by marked's URL
+    // tokenizer before reaching our renderer override, which is a separate
+    // happy accident. This test exercises the image renderer override directly.
+    const out = renderMarkdown('![evil](data:image/png;base64,iVBORw0KGgo=)')
+    expect(out).not.toContain('<img')
+    expect(out).not.toContain('src="data:')
+    // Alt text is dropped too — unsafe images render as empty.
+  })
+
+  it('strips javascript: src in markdown images', () => {
+    const out = renderMarkdown('![xss](javascript:alert(1))')
+    expect(out).not.toContain('javascript:')
+    expect(out).not.toContain('<img')
+  })
+
+  it('preserves http:// links', () => {
+    const out = renderMarkdown('[site](http://example.com)')
+    expect(out).toContain('href="http://example.com"')
+    expect(out).toContain('>site<')
+  })
+
+  it('preserves https:// links', () => {
+    const out = renderMarkdown('[site](https://example.com/path?q=1)')
+    expect(out).toContain('href="https://example.com/path?q=1"')
+  })
+
+  it('preserves mailto: links', () => {
+    const out = renderMarkdown('[mail me](mailto:hi@example.com)')
+    expect(out).toContain('href="mailto:hi@example.com"')
+  })
+
+  it('preserves relative URLs (path-based)', () => {
+    const out = renderMarkdown('[relative](/foo/bar)')
+    expect(out).toContain('href="/foo/bar"')
+  })
+
+  it('preserves fragment URLs', () => {
+    const out = renderMarkdown('[anchor](#section)')
+    expect(out).toContain('href="#section"')
+  })
+
+  it('preserves protocol-relative URLs (//example.com)', () => {
+    const out = renderMarkdown('[cdn](//example.com/img.png)')
+    expect(out).toContain('href="//example.com/img.png"')
+  })
+
+  it('preserves https:// images', () => {
+    const out = renderMarkdown('![alt](https://example.com/pic.png)')
+    expect(out).toContain('<img')
+    expect(out).toContain('src="https://example.com/pic.png"')
+  })
+
+  it('escapes visible text of blocked links so it cannot smuggle HTML', () => {
+    // If someone does [<script>alert(1)</script>](javascript:alert(1)), the
+    // visible label must not execute either. Marked already tokenizes the
+    // label as inline content, and our fallback escapeHtml call is a
+    // belt-and-suspenders defense.
+    const out = renderMarkdown('[<b>bold-ish</b>](javascript:alert(1))')
+    expect(out).not.toContain('javascript:')
+    // The literal <b>...</b> inside the link label is itself an html token
+    // and is stripped by renderer.html. Either way, no live <b> leaks out.
+    expect(out).not.toContain('<b>bold-ish</b>')
+  })
 })
 
 describe('createRenderer — renderPost', () => {

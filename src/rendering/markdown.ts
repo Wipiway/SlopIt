@@ -41,6 +41,42 @@ function stripDangerousBlocks(md: string): string {
   return parts.join('')
 }
 
+// Allowlist URL schemes for markdown links and images. Anything with an
+// unlisted scheme (javascript:, data:, vbscript:, file:, etc.) is treated
+// as unsafe and stripped. Relative URLs, fragment URLs, and
+// protocol-relative URLs (`//example.com`) are treated as safe — they
+// inherit the page's protocol, which is already HTTPS in practice.
+//
+// Without this check, a post body containing
+// `[click me](javascript:alert(1))` renders as a live XSS link, because
+// markdown `[text](url)` is a `link` token (not an `html` token) and
+// bypasses the renderer.html override above. Marked v18 removed its own
+// javascript: deny-list, so the allowlist lives here.
+function isSafeHref(href: string | null | undefined): boolean {
+  if (!href) return true // empty/missing href renders as no anchor; harmless
+  const trimmed = href.trim()
+  if (trimmed === '') return true
+  // Fragment, absolute path, relative path, or protocol-relative — safe.
+  if (/^(#|\/|\.)/.test(trimmed)) return true
+  // Scheme present? Must be in the allowlist.
+  const schemeMatch = trimmed.match(/^([a-z][a-z0-9+.-]*):/i)
+  if (schemeMatch) {
+    const scheme = schemeMatch[1]!.toLowerCase()
+    return scheme === 'http' || scheme === 'https' || scheme === 'mailto'
+  }
+  // No scheme match at all — treat as relative, safe.
+  return true
+}
+
+function escapeHtmlLocal(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 marked.use({
   hooks: {
     preprocess(md: string): string {
@@ -50,6 +86,24 @@ marked.use({
   renderer: {
     html() {
       return ''
+    },
+    link(token: { href: string; title?: string | null; text: string }): string | false {
+      if (!isSafeHref(token.href)) {
+        // Unsafe scheme — drop the anchor, emit just the visible text.
+        // token.text is marked's pre-extracted visible label; escape it
+        // defensively in case it contains HTML-looking characters.
+        return escapeHtmlLocal(token.text)
+      }
+      return false // fall through to default <a> rendering
+    },
+    image(token: { href: string; title?: string | null; text: string }): string | false {
+      if (!isSafeHref(token.href)) {
+        // Unsafe image src — strip entirely. Dropping alt text too keeps
+        // output predictable; if the author wanted alt text for accessibility
+        // with an unsafe image, they shouldn't have used an unsafe image.
+        return ''
+      }
+      return false // fall through to default <img> rendering
     },
   },
 })

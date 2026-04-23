@@ -388,12 +388,12 @@ describe('createPost', () => {
     expect(() => createPost(store, r, blog.id, { title: 'T', body: '' })).toThrow()
   })
 
-  it('compensates by DELETEing the row when render fails', () => {
+  it('compensates by DELETEing the row when render fails and bubbles the original error', () => {
     const { blog } = createBlog(store, {})
     const r = newRenderer()
 
-    // Make the output path a file, so mkdirSync will fail (can't make dir
-    // with that name).
+    // Make the output path a file, so mkdirSync inside renderPost will fail
+    // with ENOTDIR / EEXIST when it tries to create a directory with that name.
     writeFileSync(outputDir, 'not a dir')
 
     let caught: unknown
@@ -401,9 +401,18 @@ describe('createPost', () => {
       createPost(store, r, blog.id, { title: 'T', body: 'x' })
     } catch (e) { caught = e }
 
+    // Must be the original OS error, not a wrapped SlopItError — spec
+    // decision #6: createPost always throws the original render error.
     expect(caught).toBeInstanceOf(Error)
     expect(caught).not.toBeInstanceOf(SlopItError)
 
+    // The underlying failure is a filesystem error from node:fs. Assert the
+    // code is one of the expected OS codes so we can confirm we did not
+    // accidentally swallow the original error and rethrow something else.
+    const code = (caught as NodeJS.ErrnoException).code
+    expect(code === 'ENOTDIR' || code === 'EEXIST').toBe(true)
+
+    // Compensation ran: no post row remains.
     const count = store.db.prepare('SELECT COUNT(*) AS n FROM posts WHERE blog_id = ?').get(blog.id) as { n: number }
     expect(count.n).toBe(0)
   })
