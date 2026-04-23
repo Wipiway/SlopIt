@@ -100,6 +100,112 @@ export function listPublishedPostsForBlog(store: Store, blogId: string): Post[] 
 }
 
 /**
+ * Public read: fetch a single post by (blogId, slug). Drafts are
+ * included (unlike listPublishedPostsForBlog). Throws POST_NOT_FOUND.
+ */
+export function getPost(store: Store, blogId: string, slug: string): Post {
+  const row = store.db
+    .prepare(
+      `SELECT id, blog_id, slug, title, body, excerpt, tags, status,
+              seo_title, seo_description, author, cover_image,
+              published_at, created_at, updated_at
+         FROM posts WHERE blog_id = ? AND slug = ?`,
+    )
+    .get(blogId, slug) as {
+      id: string
+      blog_id: string
+      slug: string
+      title: string
+      body: string
+      excerpt: string | null
+      tags: string
+      status: 'draft' | 'published'
+      seo_title: string | null
+      seo_description: string | null
+      author: string | null
+      cover_image: string | null
+      published_at: string | null
+      created_at: string
+      updated_at: string
+    } | undefined
+
+  if (!row) {
+    throw new SlopItError(
+      'POST_NOT_FOUND',
+      `Post "${slug}" does not exist in blog "${blogId}"`,
+      { blogId, slug },
+    )
+  }
+
+  return {
+    id: row.id,
+    blogId: row.blog_id,
+    slug: row.slug,
+    title: row.title,
+    body: row.body,
+    excerpt: row.excerpt ?? undefined,
+    tags: JSON.parse(row.tags) as string[],
+    status: row.status,
+    seoTitle: row.seo_title ?? undefined,
+    seoDescription: row.seo_description ?? undefined,
+    author: row.author ?? undefined,
+    coverImage: row.cover_image ?? undefined,
+    publishedAt: row.published_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+/**
+ * Public read: list posts in a blog, optionally filtered by status.
+ * Default (no status filter) returns published only, newest first.
+ * status='draft' returns drafts, newest-first by created_at.
+ */
+export function listPosts(
+  store: Store,
+  blogId: string,
+  opts?: { status?: 'draft' | 'published' },
+): Post[] {
+  const status = opts?.status ?? 'published'
+  const orderBy = status === 'published' ? 'published_at DESC' : 'created_at DESC'
+
+  const rows = store.db
+    .prepare(
+      `SELECT id, blog_id, slug, title, body, excerpt, tags, status,
+              seo_title, seo_description, author, cover_image,
+              published_at, created_at, updated_at
+         FROM posts
+        WHERE blog_id = ? AND status = ?
+        ORDER BY ${orderBy}`,
+    )
+    .all(blogId, status) as {
+      id: string; blog_id: string; slug: string; title: string; body: string
+      excerpt: string | null; tags: string; status: 'draft' | 'published'
+      seo_title: string | null; seo_description: string | null
+      author: string | null; cover_image: string | null
+      published_at: string | null; created_at: string; updated_at: string
+    }[]
+
+  return rows.map((row) => ({
+    id: row.id,
+    blogId: row.blog_id,
+    slug: row.slug,
+    title: row.title,
+    body: row.body,
+    excerpt: row.excerpt ?? undefined,
+    tags: JSON.parse(row.tags) as string[],
+    status: row.status,
+    seoTitle: row.seo_title ?? undefined,
+    seoDescription: row.seo_description ?? undefined,
+    author: row.author ?? undefined,
+    coverImage: row.cover_image ?? undefined,
+    publishedAt: row.published_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }))
+}
+
+/**
  * Create a post. For published posts, also renders the post page + blog
  * index + CSS to disk, and returns a postUrl. For drafts, writes the DB
  * row only and returns { post } without postUrl.

@@ -80,6 +80,15 @@ export function createApiKey(store: Store, blogId: string): { apiKey: string } {
 }
 
 /**
+ * Public, stable read API. Thin wrapper around getBlogInternal so the
+ * internal helper (used by the renderer) stays unexported and consumers
+ * have a clear entry point.
+ */
+export function getBlog(store: Store, blogId: string): Blog {
+  return getBlogInternal(store, blogId)
+}
+
+/**
  * Fetch a blog by id, throwing SlopItError(BLOG_NOT_FOUND) if missing.
  * Used by the renderer (for display name / theme) and by createPost's
  * existence check. Not in the public barrel — callers must import from

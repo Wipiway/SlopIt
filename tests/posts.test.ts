@@ -12,6 +12,8 @@ import {
   isPostSlugConflict,
   autoExcerpt,
   listPublishedPostsForBlog,
+  getPost,
+  listPosts,
 } from '../src/posts.js'
 
 describe('PostInputSchema', () => {
@@ -584,5 +586,90 @@ describe('createPost — compensation DELETE best-effort', () => {
     expect(caught).toBeInstanceOf(Error)
     expect((caught as Error).message).not.toContain('simulated DELETE failure')
     expect(caught).not.toBeInstanceOf(SlopItError)
+  })
+})
+
+describe('getPost', () => {
+  let dir: string
+  let store: Store
+  let renderer: ReturnType<typeof createRenderer>
+  let blogId: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'slopit-getpost-'))
+    store = createStore({ dbPath: join(dir, 'test.db') })
+    renderer = createRenderer({ store, outputDir: join(dir, 'out'), baseUrl: 'https://b.example' })
+    blogId = createBlog(store, { name: 'test-blog' }).blog.id
+  })
+
+  afterEach(() => {
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('returns a post by blog+slug', () => {
+    const { post } = createPost(store, renderer, blogId, { title: 'Hello', body: 'body' })
+    const fetched = getPost(store, blogId, post.slug)
+    expect(fetched.id).toBe(post.id)
+    expect(fetched.title).toBe('Hello')
+  })
+
+  it('throws POST_NOT_FOUND for an unknown slug', () => {
+    expect(() => getPost(store, blogId, 'missing')).toThrow(
+      expect.objectContaining({ code: 'POST_NOT_FOUND', details: { blogId, slug: 'missing' } }),
+    )
+  })
+
+  it('throws POST_NOT_FOUND when slug exists in another blog only', () => {
+    const other = createBlog(store, { name: 'other-blog' }).blog
+    createPost(store, renderer, other.id, { title: 'Elsewhere', body: 'b', slug: 'shared' })
+    expect(() => getPost(store, blogId, 'shared')).toThrow(
+      expect.objectContaining({ code: 'POST_NOT_FOUND' }),
+    )
+  })
+})
+
+describe('listPosts', () => {
+  let dir: string
+  let store: Store
+  let renderer: ReturnType<typeof createRenderer>
+  let blogId: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'slopit-listposts-'))
+    store = createStore({ dbPath: join(dir, 'test.db') })
+    renderer = createRenderer({ store, outputDir: join(dir, 'out'), baseUrl: 'https://b.example' })
+    blogId = createBlog(store, { name: 'test-blog' }).blog.id
+  })
+
+  afterEach(() => {
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('default returns published only, newest first', () => {
+    createPost(store, renderer, blogId, { title: 'First', body: 'b', slug: 'first', status: 'draft' })
+    createPost(store, renderer, blogId, { title: 'Second', body: 'b', slug: 'second' })
+    createPost(store, renderer, blogId, { title: 'Third', body: 'b', slug: 'third' })
+    const posts = listPosts(store, blogId)
+    expect(posts.map((p) => p.slug)).toEqual(['third', 'second'])
+  })
+
+  it('status=draft returns drafts only', () => {
+    createPost(store, renderer, blogId, { title: 'D1', body: 'b', slug: 'd1', status: 'draft' })
+    createPost(store, renderer, blogId, { title: 'P1', body: 'b', slug: 'p1' })
+    const posts = listPosts(store, blogId, { status: 'draft' })
+    expect(posts.map((p) => p.slug)).toEqual(['d1'])
+  })
+
+  it('returns empty array for a blog with no matching posts', () => {
+    expect(listPosts(store, blogId)).toEqual([])
+    expect(listPosts(store, blogId, { status: 'draft' })).toEqual([])
+  })
+
+  it('does not leak other blogs\' posts', () => {
+    const other = createBlog(store, { name: 'other' }).blog
+    createPost(store, renderer, other.id, { title: 'Other', body: 'b', slug: 'other-post' })
+    expect(listPosts(store, blogId)).toEqual([])
   })
 })
