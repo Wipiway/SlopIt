@@ -12,6 +12,10 @@ import {
   isPostSlugConflict,
   autoExcerpt,
   listPublishedPostsForBlog,
+  getPost,
+  listPosts,
+  updatePost,
+  deletePost,
 } from '../src/posts.js'
 
 describe('PostInputSchema', () => {
@@ -584,5 +588,282 @@ describe('createPost — compensation DELETE best-effort', () => {
     expect(caught).toBeInstanceOf(Error)
     expect((caught as Error).message).not.toContain('simulated DELETE failure')
     expect(caught).not.toBeInstanceOf(SlopItError)
+  })
+})
+
+describe('getPost', () => {
+  let dir: string
+  let store: Store
+  let renderer: ReturnType<typeof createRenderer>
+  let blogId: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'slopit-getpost-'))
+    store = createStore({ dbPath: join(dir, 'test.db') })
+    renderer = createRenderer({ store, outputDir: join(dir, 'out'), baseUrl: 'https://b.example' })
+    blogId = createBlog(store, { name: 'test-blog' }).blog.id
+  })
+
+  afterEach(() => {
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('returns a post by blog+slug', () => {
+    const { post } = createPost(store, renderer, blogId, { title: 'Hello', body: 'body' })
+    const fetched = getPost(store, blogId, post.slug)
+    expect(fetched.id).toBe(post.id)
+    expect(fetched.title).toBe('Hello')
+  })
+
+  it('throws POST_NOT_FOUND for an unknown slug', () => {
+    expect(() => getPost(store, blogId, 'missing')).toThrow(
+      expect.objectContaining({ code: 'POST_NOT_FOUND', details: { blogId, slug: 'missing' } }),
+    )
+  })
+
+  it('throws POST_NOT_FOUND when slug exists in another blog only', () => {
+    const other = createBlog(store, { name: 'other-blog' }).blog
+    createPost(store, renderer, other.id, { title: 'Elsewhere', body: 'b', slug: 'shared' })
+    expect(() => getPost(store, blogId, 'shared')).toThrow(
+      expect.objectContaining({ code: 'POST_NOT_FOUND' }),
+    )
+  })
+})
+
+describe('listPosts', () => {
+  let dir: string
+  let store: Store
+  let renderer: ReturnType<typeof createRenderer>
+  let blogId: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'slopit-listposts-'))
+    store = createStore({ dbPath: join(dir, 'test.db') })
+    renderer = createRenderer({ store, outputDir: join(dir, 'out'), baseUrl: 'https://b.example' })
+    blogId = createBlog(store, { name: 'test-blog' }).blog.id
+  })
+
+  afterEach(() => {
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('default returns published only, newest first', () => {
+    createPost(store, renderer, blogId, {
+      title: 'First',
+      body: 'b',
+      slug: 'first',
+      status: 'draft',
+    })
+    createPost(store, renderer, blogId, { title: 'Second', body: 'b', slug: 'second' })
+    createPost(store, renderer, blogId, { title: 'Third', body: 'b', slug: 'third' })
+    const posts = listPosts(store, blogId)
+    expect(posts.map((p) => p.slug)).toEqual(['third', 'second'])
+  })
+
+  it('status=draft returns drafts only', () => {
+    createPost(store, renderer, blogId, { title: 'D1', body: 'b', slug: 'd1', status: 'draft' })
+    createPost(store, renderer, blogId, { title: 'P1', body: 'b', slug: 'p1' })
+    const posts = listPosts(store, blogId, { status: 'draft' })
+    expect(posts.map((p) => p.slug)).toEqual(['d1'])
+  })
+
+  it('returns empty array for a blog with no matching posts', () => {
+    expect(listPosts(store, blogId)).toEqual([])
+    expect(listPosts(store, blogId, { status: 'draft' })).toEqual([])
+  })
+
+  it("does not leak other blogs' posts", () => {
+    const other = createBlog(store, { name: 'other' }).blog
+    createPost(store, renderer, other.id, { title: 'Other', body: 'b', slug: 'other-post' })
+    expect(listPosts(store, blogId)).toEqual([])
+  })
+})
+
+describe('updatePost', () => {
+  let dir: string
+  let store: Store
+  let renderer: ReturnType<typeof createRenderer>
+  let outDir: string
+  let blogId: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'slopit-update-'))
+    outDir = join(dir, 'out')
+    store = createStore({ dbPath: join(dir, 'test.db') })
+    renderer = createRenderer({ store, outputDir: outDir, baseUrl: 'https://b.example' })
+    blogId = createBlog(store, { name: 'upd-blog' }).blog.id
+  })
+
+  afterEach(() => {
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('draft→draft: DB changes only, no files written', () => {
+    const { post } = createPost(store, renderer, blogId, {
+      title: 'T1',
+      body: 'b',
+      status: 'draft',
+    })
+    const postFile = join(outDir, blogId, post.slug, 'index.html')
+    expect(existsSync(postFile)).toBe(false)
+    const updated = updatePost(store, renderer, blogId, post.slug, { title: 'T2' })
+    expect(updated.post.title).toBe('T2')
+    expect(updated.postUrl).toBeUndefined()
+    expect(existsSync(postFile)).toBe(false)
+  })
+
+  it('draft→published: writes post + index, sets published_at', () => {
+    const { post } = createPost(store, renderer, blogId, {
+      title: 'Hi',
+      body: 'b',
+      status: 'draft',
+    })
+    expect(post.publishedAt).toBeNull()
+    const updated = updatePost(store, renderer, blogId, post.slug, { status: 'published' })
+    expect(updated.post.status).toBe('published')
+    expect(updated.post.publishedAt).not.toBeNull()
+    expect(updated.postUrl).toBe('https://b.example/' + post.slug + '/')
+    expect(existsSync(join(outDir, blogId, post.slug, 'index.html'))).toBe(true)
+    expect(existsSync(join(outDir, blogId, 'index.html'))).toBe(true)
+  })
+
+  it('published→published: preserves published_at, updates updated_at', async () => {
+    const { post } = createPost(store, renderer, blogId, { title: 'P', body: 'b' })
+    const originalPublishedAt = post.publishedAt
+    // small wait so updated_at can differ
+    await new Promise((r) => setTimeout(r, 10))
+    const updated = updatePost(store, renderer, blogId, post.slug, { title: 'P (edited)' })
+    expect(updated.post.publishedAt).toBe(originalPublishedAt)
+    expect(updated.post.updatedAt).not.toBe(post.updatedAt)
+    expect(updated.post.title).toBe('P (edited)')
+  })
+
+  it('published→draft: clears published_at, deletes post files, re-renders index', () => {
+    const { post } = createPost(store, renderer, blogId, { title: 'My Test', body: 'b' })
+    const postDir = join(outDir, blogId, post.slug)
+    const indexFile = join(outDir, blogId, 'index.html')
+    expect(existsSync(join(postDir, 'index.html'))).toBe(true)
+    const updated = updatePost(store, renderer, blogId, post.slug, { status: 'draft' })
+    expect(updated.post.status).toBe('draft')
+    expect(updated.post.publishedAt).toBeNull()
+    expect(updated.postUrl).toBeUndefined()
+    expect(existsSync(postDir)).toBe(false)
+    expect(readFileSync(indexFile, 'utf8')).not.toContain(post.slug)
+  })
+
+  it('empty patch is a no-op (no render, returns current post)', () => {
+    const { post } = createPost(store, renderer, blogId, { title: 'P', body: 'b' })
+    const indexBefore = readFileSync(join(outDir, blogId, 'index.html'), 'utf8')
+    const updated = updatePost(store, renderer, blogId, post.slug, {})
+    expect(updated.post.title).toBe(post.title)
+    expect(updated.post.updatedAt).toBe(post.updatedAt)
+    const indexAfter = readFileSync(join(outDir, blogId, 'index.html'), 'utf8')
+    expect(indexAfter).toBe(indexBefore)
+  })
+
+  it('rejects slug in the patch (ZodError)', () => {
+    const { post } = createPost(store, renderer, blogId, { title: 'P', body: 'b' })
+    expect(() =>
+      updatePost(store, renderer, blogId, post.slug, { slug: 'renamed' } as never),
+    ).toThrow()
+  })
+
+  it('throws POST_NOT_FOUND for unknown slug', () => {
+    expect(() => updatePost(store, renderer, blogId, 'ghost', { title: 'x' })).toThrow(
+      expect.objectContaining({ code: 'POST_NOT_FOUND' }),
+    )
+  })
+
+  it('compensates on render failure (reverts UPDATE, bubbles error)', () => {
+    const { post } = createPost(store, renderer, blogId, { title: 'Orig', body: 'b' })
+    const spy = vi.spyOn(renderer, 'renderPost').mockImplementation(() => {
+      throw new Error('synthetic render failure')
+    })
+    expect(() => updatePost(store, renderer, blogId, post.slug, { title: 'New' })).toThrow(
+      'synthetic render failure',
+    )
+    spy.mockRestore()
+    const row = getPost(store, blogId, post.slug)
+    expect(row.title).toBe('Orig') // reverted
+  })
+})
+
+describe('deletePost', () => {
+  let dir: string
+  let store: Store
+  let renderer: ReturnType<typeof createRenderer>
+  let outDir: string
+  let blogId: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'slopit-delete-'))
+    outDir = join(dir, 'out')
+    store = createStore({ dbPath: join(dir, 'test.db') })
+    renderer = createRenderer({ store, outputDir: outDir, baseUrl: 'https://b.example' })
+    blogId = createBlog(store, { name: 'del-blog' }).blog.id
+  })
+
+  afterEach(() => {
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('deletes published post row + files; index omits it; returns {deleted:true}', () => {
+    const { post } = createPost(store, renderer, blogId, { title: 'Gone', body: 'b' })
+    const postDir = join(outDir, blogId, post.slug)
+    const indexFile = join(outDir, blogId, 'index.html')
+    expect(existsSync(postDir)).toBe(true)
+
+    const result = deletePost(store, renderer, blogId, post.slug)
+    expect(result).toEqual({ deleted: true })
+
+    expect(() => getPost(store, blogId, post.slug)).toThrow(
+      expect.objectContaining({ code: 'POST_NOT_FOUND' }),
+    )
+    expect(existsSync(postDir)).toBe(false)
+    expect(readFileSync(indexFile, 'utf8')).not.toContain(post.slug)
+  })
+
+  it('deletes draft post: row gone, no files to clean up', () => {
+    const { post } = createPost(store, renderer, blogId, {
+      title: 'Draft',
+      body: 'b',
+      status: 'draft',
+    })
+    const result = deletePost(store, renderer, blogId, post.slug)
+    expect(result).toEqual({ deleted: true })
+    expect(() => getPost(store, blogId, post.slug)).toThrow(
+      expect.objectContaining({ code: 'POST_NOT_FOUND' }),
+    )
+  })
+
+  it('throws POST_NOT_FOUND for unknown slug', () => {
+    expect(() => deletePost(store, renderer, blogId, 'ghost')).toThrow(
+      expect.objectContaining({ code: 'POST_NOT_FOUND' }),
+    )
+  })
+
+  it('throws BLOG_NOT_FOUND for unknown blog', () => {
+    expect(() => deletePost(store, renderer, 'nope', 'x')).toThrow(
+      expect.objectContaining({ code: 'BLOG_NOT_FOUND' }),
+    )
+  })
+
+  it('on render failure: row still deleted, original error bubbles', () => {
+    const { post } = createPost(store, renderer, blogId, { title: 'T', body: 'b' })
+    const spy = vi.spyOn(renderer, 'renderBlog').mockImplementation(() => {
+      throw new Error('synthetic renderBlog failure')
+    })
+    expect(() => deletePost(store, renderer, blogId, post.slug)).toThrow(
+      'synthetic renderBlog failure',
+    )
+    spy.mockRestore()
+    // Weakened invariant: row is gone; stale index possible but re-render clears it
+    expect(() => getPost(store, blogId, post.slug)).toThrow(
+      expect.objectContaining({ code: 'POST_NOT_FOUND' }),
+    )
   })
 })

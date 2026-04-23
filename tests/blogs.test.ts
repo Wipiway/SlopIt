@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createStore, type Store } from '../src/db/store.js'
-import { createApiKey, createBlog, isBlogNameConflict, getBlogInternal } from '../src/blogs.js'
+import {
+  createApiKey,
+  createBlog,
+  isBlogNameConflict,
+  getBlogInternal,
+  getBlog,
+} from '../src/blogs.js'
 import { hashApiKey } from '../src/auth/api-key.js'
 import { SlopItError } from '../src/errors.js'
 import { CreateBlogInputSchema } from '../src/schema/index.js'
@@ -266,5 +272,32 @@ describe('getBlogInternal', () => {
     expect(caught).toBeInstanceOf(SlopItError)
     expect((caught as SlopItError).code).toBe('BLOG_NOT_FOUND')
     expect((caught as SlopItError).details).toEqual({ blogId: 'nonexistent' })
+  })
+})
+
+describe('getBlog', () => {
+  let dir: string
+  let store: Store
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'slopit-getblog-'))
+    store = createStore({ dbPath: join(dir, 'test.db') })
+  })
+
+  afterEach(() => {
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('returns the blog for a known id', () => {
+    const { blog } = createBlog(store, { name: 'my-blog' })
+    const fetched = getBlog(store, blog.id)
+    expect(fetched).toEqual(blog)
+  })
+
+  it('throws SlopItError(BLOG_NOT_FOUND) for an unknown id', () => {
+    expect(() => getBlog(store, 'missing')).toThrow(
+      expect.objectContaining({ code: 'BLOG_NOT_FOUND', details: { blogId: 'missing' } }),
+    )
   })
 })
