@@ -12,7 +12,9 @@
 
 ## Spec
 
-Authoritative design doc: [`docs/superpowers/specs/2026-04-23-rest-routes-mcp-design.md`](../specs/2026-04-23-rest-routes-mcp-design.md) v2.1 (commit `46dfe73`).
+Authoritative design doc: [`docs/superpowers/specs/2026-04-23-rest-routes-mcp-design.md`](../specs/2026-04-23-rest-routes-mcp-design.md) v2.2 (decision #22).
+
+> **Post-implementation correction — `/signup` idempotency withdrawn.** Review on the merged code surfaced a replay leak: with no caller identity pre-auth, two callers sharing an `Idempotency-Key` on `/signup` would both receive the first caller's `api_key`. The fix (decision #22 in the spec) skips storage and replay whenever `c.var.apiKeyHash` is empty. The inline code snippets below were written against the pre-fix contract — they still mention `/signup` in the idempotency `Applies to` list, the schema comment `-- '' for /signup (pre-auth)`, and the auth-middleware doc comment's "signup-bootstrap case". When reading those snippets as implementation guidance, treat the spec's decision #22 as authoritative; the shipped `src/api/idempotency.ts`, `src/db/migrations/002_idempotency.sql`, and `src/api/auth.ts` reflect the corrected contract.
 
 ## Pre-flight
 

@@ -1,6 +1,6 @@
 # REST Routes — Design Spec
 
-**Status:** Design draft v2 (2026-04-23). P1 review fixes applied.
+**Status:** Design draft v2.2 (2026-04-23). P1 signup-idempotency security revision applied (see decision #22).
 **Scope:** `@slopit/core`, third feature pass. Wires REST on top of the primitives shipped in `feat/create-post`. After this feature, an agent can sign up, publish, read, update, and delete posts end-to-end over HTTP.
 **Branch:** `feat/rest-routes-mcp` (from `dev @ 8886a84`). Branch name keeps `-mcp` suffix for continuity with the handoff doc; MCP lands in a follow-up.
 **Follows:** `2026-04-22-create-post-design.md`. MCP is deferred to `feat/mcp-tools` (separate spec).
@@ -17,6 +17,7 @@ Design inputs folded in up front:
 - **Proof SDK `AGENT_CONTRACT.md`** — imperative onboarding block, `_links` HATEOAS, `Content-Type: text/markdown` alternate, `Idempotency-Key` header, `auth_mode` enum.
 - **`feat-rest-routes-mcp` handoff** on dev — which parts of Proof to adopt and which to deliberately skip.
 - **P1 review feedback** (2026-04-23) — narrowed the renderer/URL contract via `rendererFor(blog)` callback, weakened idempotency guarantee explicitly, split MCP to a follow-up feature.
+- **Post-implementation P1 review** (2026-04-23) — mount-prefix auth scoping, `/signup` api_key replay leak, malformed-JSON silent success. The `/signup` leak required withdrawing signup from the idempotency contract entirely — see decision #22.
 
 Core stays single-blog-scoped: an API key resolves to exactly one blog, and there is no account concept. The router is multi-blog-capable at the routing layer (`:id` in paths) but **blog-scoped at the handler level** — each handler receives a pre-resolved blog and uses `rendererFor(blog)` to get that blog's renderer before touching the filesystem. This is the key contract that makes per-blog URLs and a shared router compatible.
 
@@ -29,7 +30,7 @@ Core stays single-blog-scoped: an API key resolves to exactly one blog, and ther
 | 1 | Ship `update_post` + `delete_post` in this feature. | Strategy v1. Publishing a typo'd post and being told "create a new one" is a broken UX. |
 | 2 | `updatePost` — slug is immutable; all other `PostInput` fields patchable; both status transitions allowed (`draft↔published`). | Slug rename is the only mutation with link-rot blast radius. Force delete+create for that edge case. |
 | 3 | `deletePost` — hard delete (row + post file + blog-index re-render). | No recycle bin for slop. Litestream backups cover accidents. |
-| 4 | `Idempotency-Key` scope = `(key, api_key_hash, method, path)` composite (Stripe-style). No TTL in v1. Header optional. Durability is **best-effort, not crash-safe** (see decision #20 and the "Idempotency-Key contract" section). | Most predictable for agents. True crash-safety requires same-transaction insert plumbing; the failure modes are tolerable at v1. |
+| 4 | `Idempotency-Key` scope = `(key, api_key_hash, method, path)` composite (Stripe-style). No TTL in v1. Header optional. Durability is **best-effort, not crash-safe** (see decision #20 and the "Idempotency-Key contract" section). The scope requires a caller identity — empty `api_key_hash` (pre-auth `/signup`, `authMode: 'none'`) causes the middleware to skip storage and replay entirely (see decision #22). | Most predictable for agents. True crash-safety requires same-transaction insert plumbing; the failure modes are tolerable at v1. The caller-identity requirement closes a replay-leak window on `/signup` that would otherwise let a second caller receive the first caller's `api_key`. |
 | 5 | Zod is the single schema source. REST handlers use `.parse()` on request bodies; `GET /schema` returns `z.toJSONSchema(PostInputSchema)`. | Zero duplication, zero new deps (verified: Zod v4 ships `toJSONSchema`). MCP's use of the same schemas lands in `feat/mcp-tools`. |
 | 6 | `authMode: 'api_key' \| 'none'`, default `'api_key'`. | Two paths, not three. Docker self-host uses `'none'`. |
 | 7 | Auth is router-level middleware. `/health`, `/signup`, `/schema`, `/bridge/report_bug` are on the skip list. | One place to audit. |
@@ -45,8 +46,9 @@ Core stays single-blog-scoped: an API key resolves to exactly one blog, and ther
 | 17 | `GET /schema` returns `z.toJSONSchema(PostInputSchema)` at the top level (no wrapper). | Structured introspection, zero new code. |
 | 18 | Cross-blog access attempt (`:id` mismatches api_key's blog) → `BLOG_NOT_FOUND` 404. | Don't leak existence of other blogs. |
 | 19 | **`rendererFor(blog): Renderer` callback replaces `renderer` + `blogUrlFor` in `ApiRouterConfig`.** Handlers compute `renderer = config.rendererFor(c.var.blog)` before calling primitives. `_links.view` / onboarding `blog_url` / `postUrl` all derive from `rendererFor(blog).baseUrl`. | P1 review fix #1. Resolves the contract break where a single `renderer.baseUrl` couldn't serve multiple blogs with distinct URLs. Zero change to shipped `Renderer` / `createPost` / `createRenderer` interfaces — self-hosted passes `() => singleton`; platform passes `blog => createRenderer({ outputDir, baseUrl: resolveBlogUrl(blog) })`. |
-| 20 | **Idempotency-Key is best-effort, not crash-safe.** Middleware records the response after the handler commits. A crash or dropped response between commit and record leaves a window where retry re-executes the handler. | P1 review fix #3. Failure modes are bounded and acceptable at v1: unnamed signup → one extra blog (platform can sweep); `POST /posts` retry → 409 `POST_SLUG_CONFLICT` (informative, agent can `GET` the existing post). Documented in SKILL.md's Idempotency section. Crash-safe variant (same-SQLite-transaction insert) is a future concern if prod shows duplicates. |
+| 20 | **Idempotency-Key is best-effort, not crash-safe.** Middleware records the response after the handler commits. A crash or dropped response between commit and record leaves a window where retry re-executes the handler. | P1 review fix #3. Failure modes for authenticated mutations are bounded and acceptable at v1: `POST /posts` retry → 409 `POST_SLUG_CONFLICT` (informative, agent can `GET` the existing post); `PATCH` re-runs a deterministic patch; `DELETE` retry → 404 `POST_NOT_FOUND`. Documented in SKILL.md's Idempotency section. Crash-safe variant (same-SQLite-transaction insert) is a future concern if prod shows duplicates. |
 | 21 | **`updatePost` on `published → published` preserves `published_at`.** Only `updated_at` moves. | P1 review nit. Agents editing a typo shouldn't rewrite the publish timestamp. |
+| 22 | **`POST /signup` is NOT covered by `Idempotency-Key`.** The middleware short-circuits whenever `c.var.apiKeyHash` is empty — including every `/signup` request (pre-auth) and every request under `authMode: 'none'` (no caller identity). Retrying `/signup` re-executes end-to-end: with a `name` → first call 200, retry 409 `BLOG_NAME_CONFLICT`; without a `name` → each retry creates a distinct unnamed blog with a distinct api_key. | Post-implementation P1 review. With no caller identity the scope tuple `(key, '', method, path)` is shared across all callers, so two independent agents reusing the same `Idempotency-Key` + payload accidentally (or maliciously) would both receive the first caller's response body — which for `/signup` includes the `api_key`. No other scoping fix is both safe and stateless at v1. Caveat documented in SKILL.md and enforced by a drift-guard test. |
 
 ---
 
@@ -57,7 +59,7 @@ Core stays single-blog-scoped: an API key resolves to exactly one blog, and ther
 | `src/api/index.ts` | MODIFY | `createApiRouter` factory. Config shape, middleware stack, route mounting. |
 | `src/api/routes.ts` | NEW | All REST route handlers. Thin: parse → call core primitive → shape response → attach `_links`. |
 | `src/api/auth.ts` | NEW | Auth middleware (respects `authMode`) + skip-path list. Attaches `c.var.blog` + `c.var.apiKeyHash`. |
-| `src/api/idempotency.ts` | NEW | Idempotency-Key middleware. Applied to `POST /signup`, `POST /blogs/:id/posts`, `PATCH`, `DELETE`. |
+| `src/api/idempotency.ts` | NEW | Idempotency-Key middleware. Applied to authenticated mutations only: `POST /blogs/:id/posts`, `PATCH`, `DELETE`. `POST /signup` is explicitly excluded (decision #22). |
 | `src/api/errors.ts` | NEW | `SlopItError` + `ZodError` → HTTP envelope middleware. Single mapping table. |
 | `src/api/links.ts` | NEW | `buildLinks(blog, config)` pure helper returning the `_links` record. |
 | `src/api/markdown-body.ts` | NEW | Parses `text/markdown` body + query-param metadata into a `PostInput`. |
@@ -166,7 +168,7 @@ All authenticated routes live under the `/` root — no `/api` prefix in core. C
 | Method | Path | Auth | Body | 2xx Response | Idempotent |
 |---|---|---|---|---|---|
 | GET  | `/health` | none | — | `{ ok: true }` | — |
-| POST | `/signup` | none | `{ name?, theme? }` JSON | `{ blog_id, blog_url, api_key, mcp_endpoint?, onboarding_text, _links }` | ✅ |
+| POST | `/signup` | none | `{ name?, theme? }` JSON | `{ blog_id, blog_url, api_key, mcp_endpoint?, onboarding_text, _links }` | ❌ (decision #22) |
 | GET  | `/schema` | none | — | `z.toJSONSchema(PostInputSchema)` | — |
 | POST | `/bridge/report_bug` | none | any JSON | 501 `{ error: { code: NOT_IMPLEMENTED, message, details: { use } } }` | — |
 | GET  | `/blogs/:id` | api_key | — | `{ blog, _links }` | — |
@@ -227,7 +229,7 @@ Envelope:
 ```
 idempotency_keys (
   key             TEXT NOT NULL,
-  api_key_hash    TEXT NOT NULL,     -- '' for /signup (pre-auth)
+  api_key_hash    TEXT NOT NULL,     -- MUST be non-empty; middleware skips storage/replay when hash is '' (decision #22)
   method          TEXT NOT NULL,
   path            TEXT NOT NULL,     -- exact path (with :id / :slug substituted)
   request_hash    TEXT NOT NULL,     -- sha256 of canonical request body
@@ -238,15 +240,16 @@ idempotency_keys (
 )
 ```
 
-**Applies to:** `POST /signup`, `POST /blogs/:id/posts`, `PATCH /blogs/:id/posts/:slug`, `DELETE /blogs/:id/posts/:slug`.
+**Applies to:** `POST /blogs/:id/posts`, `PATCH /blogs/:id/posts/:slug`, `DELETE /blogs/:id/posts/:slug` — i.e. mutations made by an *authenticated* caller. `POST /signup` is excluded by decision #22; any request with empty `c.var.apiKeyHash` passes through without storage or replay.
 
 **Flow:**
 1. No header → skip.
-2. Look up PK tuple.
+2. Empty `c.var.apiKeyHash` (no caller identity) → skip (decision #22).
+3. Look up PK tuple.
    - **Miss:** pass the request through. On a 2xx response, `INSERT` the row with the captured body. Non-2xx responses are NOT stored (don't want to replay errors).
    - **Hit, `request_hash` matches:** short-circuit; return the stored `(status, body)` verbatim.
    - **Hit, `request_hash` mismatches:** 422 `IDEMPOTENCY_KEY_CONFLICT` with `details: { key, method, path }`.
-3. `request_hash` canonicalization — unified formula across all body types: `sha256(method + '\0' + path + '\0' + content_type + '\0' + sorted_query_string + '\0' + raw_body_bytes)`. No field reordering inside the body — bytewise hash of the wire form. (Tradeoff: agents that reorder JSON fields get a 422 on semantically-identical payloads. Acceptable at v1 — documented in SKILL.md.)
+4. `request_hash` canonicalization — unified formula across all body types: `sha256(method + '\0' + path + '\0' + content_type + '\0' + sorted_query_string + '\0' + raw_body_bytes)`. No field reordering inside the body — bytewise hash of the wire form. (Tradeoff: agents that reorder JSON fields get a 422 on semantically-identical payloads. Acceptable at v1 — documented in SKILL.md.)
 
 No TTL in v1. Row pruning is a future concern.
 
@@ -257,19 +260,17 @@ The record-after-success flow above has an intentional gap: if the server crashe
 - **What `Idempotency-Key` *does* prevent:** duplicate execution when the client retries a request for which the 2xx response was already stored (the common case — client's network hiccup, client-side retry after a 200 was received but not acted on, etc.).
 - **What it does NOT prevent:** duplicate execution when the server crashes (or the response is never written) between handler commit and the idempotency record's `INSERT`. In that window, the handler's side effects are already durable but no replay record exists.
 
-**Observable failure modes in that window:**
+**Observable failure modes in that window** (authenticated mutations only; `/signup` is covered separately by decision #22):
 
 | Endpoint | Retry outcome | User-visible effect |
 |---|---|---|
-| `POST /signup` with name | 409 `BLOG_NAME_CONFLICT` | Clear signal; agent uses the original key if it received one, otherwise contacts support / platform sweep. |
-| `POST /signup` without name | Second blog created | Orphan blog on the platform side; platform sweeps in a background job. |
 | `POST /blogs/:id/posts` | 409 `POST_SLUG_CONFLICT` | Clear signal; agent can `GET /blogs/:id/posts/:slug` to confirm the original succeeded. |
 | `PATCH /blogs/:id/posts/:slug` | Second patch applied (idempotent if patch is deterministic; diverges if patch includes e.g. auto-excerpt that re-reads body) | In practice patches are deterministic — same input → same output. Re-running is mostly a no-op. |
 | `DELETE /blogs/:id/posts/:slug` | 404 `POST_NOT_FOUND` | Clear signal; the post is already gone. |
 
 All failure modes are bounded and informative. **SKILL.md's Idempotency section MUST document this caveat** so agents don't assume stronger-than-reality guarantees.
 
-Crash-safe variant (same-SQLite-transaction insert, in which the idempotency row commits atomically with the business row) is deferred to a future feature if prod shows duplicate-signup incidents at a rate that justifies the plumbing cost.
+Crash-safe variant (same-SQLite-transaction insert, in which the idempotency row commits atomically with the business row) is deferred to a future feature if prod shows duplicate-mutation incidents at a rate that justifies the plumbing cost.
 
 ---
 
@@ -385,14 +386,14 @@ Target: `pnpm test` passes with all existing 176 tests plus the new ones. Covera
 
 **Required coverage areas** (test case lists live in the plan, not here):
 
-- **Signup:** happy path returns all documented fields; `_links` present; onboarding text passes structural checks; `BLOG_NAME_CONFLICT` maps to 409; idempotent signup replays.
+- **Signup:** happy path returns all documented fields; `_links` present; onboarding text passes structural checks; `BLOG_NAME_CONFLICT` maps to 409; `Idempotency-Key` reuse on `/signup` does NOT replay — two callers with the same key + payload each get a fresh signup, and the second response never echoes the first caller's `api_key` (decision #22 regression guard).
 - **Auth middleware:** no key, malformed key, unknown key → 401. Cross-blog `:id` → 404 (verify response body is identical to a genuinely-missing blog). `authMode: 'none'` skips entirely.
 - **Create post, JSON + text/markdown:** both Content-Type paths produce equivalent posts when the inputs match. Query-param parsing handles missing/extra params.
 - **Update post:** each cell of the render matrix (including `published_at` preservation on pub→pub); slug-patch rejected with `ZodError`; patch with 0 fields is a no-op (no render, returns current post).
 - **Delete post:** row + file + index side effects verified on disk.
 - **Read side:** `getBlog`, `getPost`, `listPosts` (each status filter; default behavior).
 - **`rendererFor(blog)` contract:** router threads `c.var.blog` through `rendererFor` before every primitive call; a test harness with two distinct blogs + two distinct renderers verifies no cross-blog URL leakage in response bodies or rendered files.
-- **Idempotency:** replay (same key + same payload → identical response); mismatch (same key + different payload → 422); scope isolation (same key on different method/path → independent); signup bootstrap (pre-auth row with `api_key_hash = ''`). No test for the crash-window failure mode (it's an accepted gap per decision #20).
+- **Idempotency:** replay (same key + same payload on an authenticated mutation → identical response); mismatch (same key + different payload → 422); scope isolation (same key on different method/path → independent; same key on different `api_key_hash` → independent); empty-`api_key_hash` skip (decision #22 — no storage, no replay, handler runs every time, nothing persisted). No test for the crash-window failure mode (accepted gap per decision #20).
 - **Error envelope:** one case per error code → correct status + correct envelope shape.
 - **Bug-report stub:** 501 + envelope + `details.use` pointing to platform URL when configured.
 - **SKILL.md:** structural sections present; route-table parity with `createApiRouter`.
