@@ -69,7 +69,7 @@ Core stays single-blog-scoped: an API key resolves to exactly one blog, and ther
 | `src/db/migrations/002_idempotency.sql` | NEW | `idempotency_keys` table + composite PK. |
 | `src/schema/index.ts` | MODIFY | Exports `PostPatchSchema = PostInputBaseSchema.partial().omit({ slug: true })` and `PostPatchInput` type. |
 | `src/errors.ts` | MODIFY | Adds `POST_NOT_FOUND`, `UNAUTHORIZED`, `IDEMPOTENCY_KEY_CONFLICT`, `NOT_IMPLEMENTED` to the union. |
-| `src/index.ts` | MODIFY | Adds public exports for all new primitives + generators + schemas + error codes. **Removes** the existing `createMcpServer` / `McpServerConfig` stub exports (the stub throws "not implemented"; rather than shipping a throwing export, wait for `feat/mcp-tools` to add the real ones). |
+| `src/index.ts` | MODIFY | Adds public exports for all new primitives + generators + schemas + error codes. **Keeps** the existing `createMcpServer` / `McpServerConfig` stub exports in place — they were already promised in README / ARCHITECTURE / CLAUDE / examples, and `feat/mcp-tools` will swap the stub body for the real implementation without a doc cascade. |
 | `tests/api/*.test.ts` | NEW | One file per route group: `signup`, `posts-crud`, `posts-markdown-body`, `schema`, `bridge`, `health`. Uses Hono's `app.request()`. |
 | `tests/auth.test.ts` | NEW | `verifyApiKey` + middleware behavior (no key, bad key, cross-blog mismatch leak check, `authMode: 'none'`). |
 | `tests/idempotency.test.ts` | NEW | Replay, payload-mismatch (422), signup-bootstrap (no api_key yet), scope isolation by method/path. |
@@ -132,7 +132,7 @@ export interface ApiRouterConfig {
 Notes on `rendererFor`:
 - MUST return a `Renderer` whose `baseUrl` is the full URL (with scheme) at which this blog's content is publicly served.
 - Called on every mutation handler and in `_links` construction. Callers MAY cache per blog id if construction is expensive; for v1 self-hosted it returns a pre-built singleton and platform returns a memoized-per-blog instance.
-- `createMcpServer` is not exported in this feature — it's the follow-up `feat/mcp-tools`. The existing stub in `src/mcp/server.ts` stays in place but is not wired in `src/index.ts` yet.
+- `createMcpServer` stays exported from the public barrel as a throwing stub (`src/mcp/server.ts` unchanged). It's already in README / ARCHITECTURE / CLAUDE / examples; removing the export would force a doc cascade with no benefit. `feat/mcp-tools` replaces the stub body with the real implementation; the export line in `src/index.ts` is untouched.
 
 ```ts
 // Schemas + types
@@ -401,7 +401,7 @@ Target: `pnpm test` passes with all existing 176 tests plus the new ones. Covera
 
 ## Out of scope
 
-- **MCP server and tools** — deferred to `feat/mcp-tools` (own spec). The `src/mcp/server.ts` stub stays as-is; no public export of `createMcpServer` in this feature.
+- **MCP server and tools** — deferred to `feat/mcp-tools` (own spec). The `src/mcp/server.ts` stub and its public exports (`createMcpServer`, `McpServerConfig`) stay as-is; `feat/mcp-tools` replaces the stub body.
 - `list_blogs`, `create_blog` as second-blog tool (platform).
 - Dashboard (its own feature track).
 - `request_id` in error envelopes (Tier-2).
