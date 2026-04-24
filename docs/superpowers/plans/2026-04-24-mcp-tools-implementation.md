@@ -1292,7 +1292,7 @@ Implements spec "Public API" + Decision #12. Returns an SDK `McpServer` with no 
 - Modify: `src/mcp/server.ts`
 - Create: `tests/mcp/server.test.ts`
 
-- [ ] **Step 1: Write failing test for the factory shape**
+- [x] **Step 1: Write failing test for the factory shape**
 
 Create `tests/mcp/server.test.ts`:
 
@@ -1359,12 +1359,12 @@ describe('createMcpServer', () => {
 })
 ```
 
-- [ ] **Step 2: Run — fails because stub throws**
+- [x] **Step 2: Run — fails because stub throws**
 
 Run: `pnpm test -- tests/mcp/server.test.ts`
 Expected: `createMcpServer: not implemented` thrown.
 
-- [ ] **Step 3: Replace stub with factory**
+- [x] **Step 3: Replace stub with factory**
 
 Replace `src/mcp/server.ts`:
 
@@ -1402,7 +1402,7 @@ export function createMcpServer(config: McpServerConfig): McpServer {
 }
 ```
 
-- [ ] **Step 4: Create a minimal `src/mcp/tools.ts` stub that compiles**
+- [x] **Step 4: Create a minimal `src/mcp/tools.ts` stub that compiles**
 
 For this task we ship a placeholder so the factory compiles; tools populate in Phase 2.
 
@@ -1421,17 +1421,17 @@ export function registerTools(_server: McpServer, _config: McpServerConfig): voi
 }
 ```
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run: `pnpm test -- tests/mcp/server.test.ts`
 Expected: 2 passed.
 
-- [ ] **Step 6: Run `pnpm check`**
+- [x] **Step 6: Run `pnpm check`**
 
 Run: `pnpm check`
 Expected: typecheck + lint + prettier green; total test count = 339 + 2 = 341.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/mcp/server.ts src/mcp/tools.ts tests/mcp/server.test.ts
