@@ -26,7 +26,7 @@ MCP is configured through the same shape as REST: `createMcpServer(config)` take
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| 1 | **Per-connection bearer auth.** `authMode: 'api_key'` reads `Authorization: Bearer <key>` from `extra.requestInfo.headers` via case-insensitive lookup (`IsomorphicHeaders` is a plain record — see `resolveBearer` impl notes). Stdio transport uses `authMode: 'none'` (single-tenant self-host). Per-call `apiKey` tool argument is NOT supported. | Real MCP clients (Claude Desktop, agent sandboxes) configure one bearer per connection. Per-call `apiKey` clutters every tool's schema shown to the LLM. Stdio is self-host territory where `authMode: 'none'` is the natural choice. |
+| 1 | **Per-connection bearer auth.** `authMode: 'api_key'` reads the bearer from two sources, first-hit wins: `extra.authInfo?.token` (transport-native — used by `InMemoryTransport.send({ authInfo })` and OAuth HTTP) and `extra.requestInfo?.headers` case-insensitively (HTTP transports' `Authorization: Bearer <key>` header). Stdio uses `authMode: 'none'` (single-tenant self-host). Per-call `apiKey` tool argument is NOT supported. | Real MCP clients configure one bearer per connection. Per-call `apiKey` clutters every tool's schema. Reading both sources keeps the test harness clean (InMemoryTransport's native `authInfo`) AND supports real HTTP headers. |
 | 2 | **Error envelope = `content` text + `structuredContent`.** Every error returns `{ isError: true, content: [{ type: 'text', text: '${code}: ${message}' }], structuredContent: { error: { code, message, details } } }`. | Text content keeps older MCP clients rendering a readable message; `structuredContent` matches REST's envelope 1:1 so agents can dispatch on `code`. |
 | 3 | **Extract a shared idempotency helper** (`src/idempotency-store.ts`) called by both REST's Hono middleware and MCP's `wrapTool`. Same `idempotency_keys` table, same scope-tuple semantics, same weakened-durability guarantee (decision #20 from REST spec). | Two callers with identical invariants (scope tuple, hash, same DB table) is exactly the threshold where extraction beats duplication. Idempotency semantics are the one thing that must not diverge silently between transports. |
 | 4 | **`wrapTool` higher-order function** wraps each tool's business logic in the auth → cross-blog guard → idempotency → error-envelope pipeline. The 8 tool registrations each pass a `WrapToolOpts` + a thin business handler. | Keeps per-tool logic readable and greppable while ensuring the cross-cutting plumbing lives in one place. Prevents silent divergence (e.g. forgetting the cross-blog guard on a single tool). |
@@ -52,7 +52,7 @@ MCP is configured through the same shape as REST: `createMcpServer(config)` take
 | `src/mcp/server.ts` | MODIFY | `createMcpServer(config)` factory. Constructs an SDK `McpServer`, calls `registerTools(server, config)`, returns the server. No transport attached. |
 | `src/mcp/tools.ts` | NEW | `registerTools(server, config): void`. The 8 tool registrations + their business handlers. |
 | `src/mcp/wrap-tool.ts` | NEW | `wrapTool(name, opts, business): ToolCallback`. Auth + cross-blog + idempotency + error-envelope pipeline in one place. |
-| `src/mcp/auth.ts` | NEW | `resolveBearer(extra, config): string \| null`. Reads `Authorization: Bearer` from `extra.requestInfo?.headers` case-insensitively (the SDK's `IsomorphicHeaders` is a plain record, not a `Headers` instance — Streamable HTTP lowercases but other transports may not); `null` under `authMode: 'none'`. |
+| `src/mcp/auth.ts` | NEW | `resolveBearer(extra, config): string \| null`. Tries `extra.authInfo?.token` first (transport-native — set by `InMemoryTransport.send({ authInfo })` or OAuth middleware), then `extra.requestInfo?.headers` case-insensitively (the SDK's `IsomorphicHeaders` is a plain record, not a `Headers` instance); `null` under `authMode: 'none'`. |
 | `src/idempotency-store.ts` | NEW | Transport-agnostic. `lookupIdempotencyRecord(store, scope): { status: 'miss' } \| { status: 'hit-match', body: string, responseStatus: number } \| { status: 'hit-mismatch' }` + `recordIdempotencyResponse(store, scope, body, responseStatus): void`. Shared `idempotency_keys` table. |
 | `src/envelope.ts` | NEW | `mapErrorToEnvelope(err): Envelope` where `Envelope = { code, message, details, statusHint }`. Deterministic but has one side effect — `console.error` on unhandled errors so a single log line fires regardless of transport. |
 | `src/api/errors.ts` | MODIFY | `respondError` delegates to `mapErrorToEnvelope`. External shape unchanged; `errorMiddleware` signature unchanged. Also strips `statusHint` from the wire envelope. |
@@ -276,9 +276,11 @@ export function resolveBearer(
 ```
 
 - `config.authMode === 'none'`: return `null`. Callers that need a bearer in this mode throw `UNAUTHORIZED` — but of the 8 tools, only those with `crossBlogGuard` reach the auth path in `'none'` mode, and they resolve via `getBlogInternal(store, args.blog_id)` instead of a bearer.
-- `config.authMode === 'api_key'`: read the `authorization` header from `extra.requestInfo?.headers` **case-insensitively**. `IsomorphicHeaders` is a plain record, not a `Headers` instance — `.authorization` will hit under Streamable HTTP (lowercased today) but is not guaranteed across transports. Implementation: iterate entries and match `key.toLowerCase() === 'authorization'`. If the value is a non-empty string starting with `'Bearer '` (case-insensitive on the prefix is optional but cheap — compare with `.toLowerCase().startsWith('bearer ')`), return the trimmed remainder. Otherwise return `null` — the `wrapTool` step maps `null` to `UNAUTHORIZED`.
+- `config.authMode === 'api_key'`: try two sources in order, first non-null wins:
+  1. **`extra.authInfo?.token`** — populated by transports that carry auth natively. `InMemoryTransport.send({ authInfo })` is the practical path for in-process tests (no monkey-patching needed); OAuth-aware HTTP transports also set `authInfo` when tokens authenticate successfully.
+  2. **`extra.requestInfo?.headers`** — HTTP transports' header map. Lookup is **case-insensitive**: `IsomorphicHeaders` is a plain record, not a `Headers` instance, so `.authorization` hits under Streamable HTTP (lowercased today) but isn't guaranteed across transports. Implementation: iterate entries and match `key.toLowerCase() === 'authorization'`. If the value is a non-empty string whose prefix is `bearer ` (case-insensitive — compare with `.toLowerCase().startsWith('bearer ')`), return the trimmed remainder.
 
-Case handling is defensive: `extra.requestInfo` may be `undefined` on stdio or other transports that don't produce HTTP request metadata. Stdio users are expected to set `authMode: 'none'`; an `api_key` mode call arriving without `requestInfo` fails with `UNAUTHORIZED` (rather than crashing).
+Both paths return `null` on miss; `wrapTool` maps `null` to `UNAUTHORIZED`. Defensive: `extra.requestInfo` and `extra.authInfo` may both be `undefined` on stdio or other transports that don't produce request metadata. Stdio users are expected to set `authMode: 'none'`; an `api_key` call arriving without either source fails with `UNAUTHORIZED` rather than crashing.
 
 ---
 
@@ -294,7 +296,7 @@ Target: `pnpm test` passes with all existing 308 tests plus the new ones. New mo
   - Regression guard (decision #22 parity): calling `signup` with `idempotency_key` in args returns the SDK-shaped validation error (`isError: true`, `content[0].text` begins with `'Input validation error:'`, no `structuredContent`). Confirms the arg is rejected at the schema layer, not silently dropped. See decision #15 for why this is the SDK shape rather than our `ZOD_VALIDATION` envelope.
 
 - **`create_post`** (`tests/mcp/posts-create.test.ts`):
-  - Happy path: post created, returned `post_url` matches `rendererFor(blog).baseUrl + '/<slug>'`.
+  - Happy path: post created, returned `post_url` matches `rendererFor(blog).baseUrl + '/<slug>/'` (trailing slash — matches REST; see `src/posts.ts` `postUrl` construction).
   - Missing title: SDK-shaped validation error (no `structuredContent`; text starts with `'Input validation error:'`). See decision #15.
   - Cross-blog guard: call with `blog_id` that doesn't match bearer's blog → `BLOG_NOT_FOUND` envelope.
   - Idempotency replay: two identical calls with the same `idempotency_key` return identical `structuredContent`.
@@ -342,9 +344,9 @@ Target: `pnpm test` passes with all existing 308 tests plus the new ones. New mo
 
 - **Envelope parity** — covered jointly by `wrap-tool.test.ts` (MCP side) + existing `errors.test.ts` (REST side). No new standalone test; both call `mapErrorToEnvelope` under the hood.
 
-### Test harness — the InMemoryTransport auth workaround
+### Test harness — injecting the bearer via InMemoryTransport
 
-The SDK's `InMemoryTransport` doesn't carry HTTP headers. For `authMode: 'api_key'` tests we inject the bearer into `extra.requestInfo.headers.authorization` via a small test helper that monkey-patches the transport's request dispatch. The helper is ugly; it's test-only code; we keep it ≤15 lines and don't abstract it further. Production bearer delivery is exercised by the Tier 2 HTTP example.
+The SDK's `InMemoryTransport` supports `send({ authInfo })` natively: the `authInfo` option propagates to `extra.authInfo` on the server side. `resolveBearer` reads `extra.authInfo?.token` first, so tests don't need monkey-patching — they wrap the client transport's `send` in a small helper (~5–10 lines) that injects `{ token: apiKey, clientId: 'test', scopes: [] }` on every outgoing request. Production HTTP header delivery is exercised by the Tier 2 HTTP example.
 
 ---
 

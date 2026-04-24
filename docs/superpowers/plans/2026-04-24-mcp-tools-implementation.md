@@ -91,15 +91,17 @@ export const slugTitleRefinement = (
 }
 ```
 
-- [ ] **Step 2: Update `src/schema/index.ts` to import from the new module**
+- [ ] **Step 2: Rewrite `src/schema/index.ts`**
 
-Replace the inline const + inline superRefine at lines 16–43 with imports. The file should become:
+Replace the inline `PostInputBaseSchema` const + inline `superRefine` callback with imports from the new module. Do NOT re-export them — they must stay out of the barrel because `src/index.ts` does `export * from './schema/index.js'` and re-exporting would leak them publicly. `src/mcp/tools.ts` (Task 8+) imports directly from `./post-input-base.js`, bypassing the barrel.
+
+Final contents of `src/schema/index.ts`:
 
 ```ts
 import { z } from 'zod'
 import { PostInputBaseSchema, slugTitleRefinement } from './post-input-base.js'
 
-export { PostInputBaseSchema, slugTitleRefinement } // still not barrel-exported — see src/index.ts
+// NOT re-exported — stays internal. MCP imports from ./post-input-base.js directly.
 
 // Blog — the top-level container. name is nullable because unnamed /b/:slug
 // blogs are allowed (see strategy: "instant" tier, path-based URLs).
@@ -111,10 +113,12 @@ export const BlogSchema = z.object({
 })
 export type Blog = z.infer<typeof BlogSchema>
 
+// PostInput — what the API/MCP caller provides. Kept opinionated.
 export const PostInputSchema = PostInputBaseSchema.superRefine(slugTitleRefinement)
 export type PostInput = z.input<typeof PostInputSchema>
 
-// Patch schema for updatePost (see full comment in original file) ...
+// Patch schema for updatePost — slug is rejected via .strict(); empty
+// patch is a valid no-op. See spec decision #2 + src/posts.ts updatePost.
 export const PostPatchSchema = z
   .object({
     title: z.string().trim().min(1).max(200).optional(),
@@ -141,7 +145,7 @@ export const PostSchema = PostInputBaseSchema.extend({
 })
 export type Post = z.infer<typeof PostSchema>
 
-// Input for createBlog.
+// Input for createBlog. `name` is DNS-subdomain-safe.
 export const CreateBlogInputSchema = z.object({
   name: z
     .string()
@@ -154,27 +158,14 @@ export const CreateBlogInputSchema = z.object({
 export type CreateBlogInput = z.input<typeof CreateBlogInputSchema>
 ```
 
-Note the inline comment preserves the original block docs about what each schema does (the spec lists this under Decision #6 rationale). Keep the surrounding comments from the original file — copy them verbatim.
+Copy the block-doc comments from the original file verbatim — the snippet above omits a few for brevity but the file on disk should preserve them.
 
-- [ ] **Step 3: Keep `post-input-base` out of the public barrel**
-
-Verify `src/index.ts` has no new export added by this refactor. The line `export * from './schema/index.js'` forwards anything exported from `./schema/index.js`. Since step 2 re-exports `PostInputBaseSchema` and `slugTitleRefinement` from `src/schema/index.ts`, they'd leak through the `export *`. Fix: in `src/schema/index.ts`, remove the `export { PostInputBaseSchema, slugTitleRefinement }` line — these are imported for internal use but NOT re-exported. MCP's `src/mcp/tools.ts` will import them directly from `src/schema/post-input-base.js` (step 2 in Task 8 onwards), bypassing the barrel.
-
-Final `src/schema/index.ts` top section should read:
-
-```ts
-import { z } from 'zod'
-import { PostInputBaseSchema, slugTitleRefinement } from './post-input-base.js'
-
-// (no re-export — these remain internal; import from post-input-base.js directly)
-```
-
-- [ ] **Step 4: Run the full test suite to verify no regression**
+- [ ] **Step 3: Run the full test suite to verify no regression**
 
 Run: `pnpm check`
 Expected: all 308 tests still pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add src/schema/post-input-base.ts src/schema/index.ts
@@ -252,10 +243,13 @@ describe('mapErrorToEnvelope', () => {
   })
 
   it('maps unknown throwables to INTERNAL_ERROR + console.error', () => {
-    const errs: string[] = []
+    const logs: string[] = []
     const origConsole = console.error
     console.error = (...args: unknown[]) => {
-      errs.push(String(args[0] ?? ''))
+      // Capture ALL args — mapErrorToEnvelope logs `'[slopit] …:'` as
+      // arg[0] and the Error as arg[1]; asserting against only arg[0]
+      // would miss the actual error text.
+      logs.push(args.map((a) => (a instanceof Error ? a.message : String(a))).join(' '))
     }
     try {
       const env = mapErrorToEnvelope(new Error('boom'))
@@ -263,7 +257,8 @@ describe('mapErrorToEnvelope', () => {
       expect(env.statusHint).toBe(500)
       expect(env.message).toBe('An internal error occurred')
       expect(env.details).toEqual({})
-      expect(errs.join(' ')).toContain('boom')
+      expect(logs.join(' ')).toContain('boom')
+      expect(logs.join(' ')).toContain('[slopit]')
     } finally {
       console.error = origConsole
     }
@@ -938,7 +933,7 @@ describe('wrapTool', () => {
     makeExtra({ authInfo: { token: apiKey, clientId: 'test', scopes: [] } })
 
   it('public tools run without auth and wrap results in structuredContent', async () => {
-    const cb = wrapTool('noop', { auth: 'public' }, async () => ({ ok: true }))
+    const cb = wrapTool(config, 'noop', { auth: 'public' }, async () => ({ ok: true }))
     const result = await cb({}, makeExtra())
     expect(result.isError).toBeUndefined()
     expect(result.structuredContent).toEqual({ ok: true })
@@ -946,7 +941,7 @@ describe('wrapTool', () => {
   })
 
   it("auth: 'required' + no bearer → UNAUTHORIZED envelope", async () => {
-    const cb = wrapTool('x', { auth: 'required' }, async () => ({ ok: true }))
+    const cb = wrapTool(config, 'x', { auth: 'required' }, async () => ({ ok: true }))
     const result = await cb({}, makeExtra())
     expect(result.isError).toBe(true)
     expect(result.structuredContent).toMatchObject({
@@ -955,7 +950,7 @@ describe('wrapTool', () => {
   })
 
   it("auth: 'required' + invalid bearer → UNAUTHORIZED envelope", async () => {
-    const cb = wrapTool('x', { auth: 'required' }, async () => ({ ok: true }))
+    const cb = wrapTool(config, 'x', { auth: 'required' }, async () => ({ ok: true }))
     const result = await cb(
       {},
       makeExtra({ authInfo: { token: 'sk_slop_nope', clientId: 't', scopes: [] } }),
@@ -965,7 +960,7 @@ describe('wrapTool', () => {
   })
 
   it('valid bearer + no args → business handler receives ctx.blog and ctx.apiKeyHash', async () => {
-    const cb = wrapTool<{ blog_id?: string }>('x', { auth: 'required' }, async (_args, ctx) => {
+    const cb = wrapTool<{ blog_id?: string }>(config, 'x', { auth: 'required' }, async (_args, ctx) => {
       return { blog_id_from_ctx: ctx.blog!.id, hash_len: ctx.apiKeyHash!.length }
     })
     const res = await cb({}, authExtra())
@@ -974,6 +969,7 @@ describe('wrapTool', () => {
 
   it('cross-blog guard: args.blog_id mismatches → BLOG_NOT_FOUND envelope', async () => {
     const cb = wrapTool<{ blog_id: string }>(
+      config,
       'x',
       { auth: 'required', crossBlogGuard: true },
       async (_args) => ({ ok: true }),
@@ -986,7 +982,7 @@ describe('wrapTool', () => {
   })
 
   it('business-thrown SlopItError maps via envelope', async () => {
-    const cb = wrapTool('x', { auth: 'required' }, async () => {
+    const cb = wrapTool(config, 'x', { auth: 'required' }, async () => {
       throw new SlopItError('POST_NOT_FOUND', 'nope', { slug: 'x' })
     })
     const res = await cb({}, authExtra())
@@ -1002,10 +998,10 @@ describe('wrapTool', () => {
   it("authMode: 'none' + crossBlogGuard: resolves blog from args.blog_id, no bearer required", async () => {
     const noneConfig: McpServerConfig = { ...config, authMode: 'none' }
     const cb = wrapTool<{ blog_id: string }>(
+      noneConfig,
       'x',
       { auth: 'required', crossBlogGuard: true },
       async (_args, ctx) => ({ id: ctx.blog!.id }),
-      noneConfig,
     )
     const res = await cb({ blog_id: blogId }, makeExtra())
     expect(res.isError).toBeUndefined()
@@ -1015,6 +1011,7 @@ describe('wrapTool', () => {
   it('idempotency: same key + same args replays previous result', async () => {
     let calls = 0
     const cb = wrapTool<{ blog_id: string; idempotency_key?: string; name: string }>(
+      config,
       'x',
       { auth: 'required', idempotent: true, crossBlogGuard: true },
       async (args) => {
@@ -1036,6 +1033,7 @@ describe('wrapTool', () => {
 
   it('idempotency: same key + different args → IDEMPOTENCY_KEY_CONFLICT', async () => {
     const cb = wrapTool<{ blog_id: string; idempotency_key?: string; name: string }>(
+      config,
       'x',
       { auth: 'required', idempotent: true, crossBlogGuard: true },
       async (args) => ({ name: args.name }),
@@ -1051,6 +1049,7 @@ describe('wrapTool', () => {
   it('idempotency is skipped when no idempotency_key is passed', async () => {
     let calls = 0
     const cb = wrapTool<{ blog_id: string; idempotency_key?: string }>(
+      config,
       'x',
       { auth: 'required', idempotent: true, crossBlogGuard: true },
       async () => {
@@ -1065,7 +1064,7 @@ describe('wrapTool', () => {
 })
 ```
 
-(Note the last new signature `wrapTool(name, opts, business, config?)` — the config defaults to a module-scoped binding set by `createMcpServer`; tests pass it explicitly to override `authMode`. See step 3.)
+`wrapTool`'s signature is `wrapTool(config, name, opts, business)` — config first, always explicit, no module-globals. `registerTools` in Tasks 7–12 passes the same `config` that `createMcpServer` received.
 
 - [ ] **Step 2: Run tests to verify failure**
 
@@ -1159,18 +1158,18 @@ function errorResult(err: unknown): CallToolResult {
 /**
  * Wrap a business handler with the auth → cross-blog → idempotency →
  * error-envelope pipeline. Every MCP tool registration goes through
- * this. `configOverride` is the production-wire-up mechanism; in tests
- * you can pass it explicitly to override authMode etc.
+ * this. Config is explicit (first arg) so multiple McpServer instances
+ * in the same process don't collide on a global, and so tests can
+ * stand up an isolated server without module state.
  */
 export function wrapTool<A extends Record<string, unknown> = Record<string, unknown>>(
+  config: McpServerConfig,
   name: string,
   opts: WrapToolOpts,
   business: ToolBusiness<A>,
-  configOverride?: McpServerConfig,
 ): WrappedToolCallback<A> {
   return async (args, extra) => {
     try {
-      const config = configOverride ?? getActiveConfig()
       const ctx: ToolCtx = { store: config.store, config }
 
       // Step 1: Auth
@@ -1250,24 +1249,9 @@ export function wrapTool<A extends Record<string, unknown> = Record<string, unkn
   }
 }
 
-// Module-scoped active config. createMcpServer sets it so wrapTool can
-// read config without every tool registration threading it explicitly.
-// Tests pass configOverride instead of touching this.
-let _activeConfig: McpServerConfig | undefined
-
-export function setActiveConfig(config: McpServerConfig): void {
-  _activeConfig = config
-}
-
-function getActiveConfig(): McpServerConfig {
-  if (!_activeConfig) {
-    throw new Error(
-      'wrapTool called before createMcpServer set the active config — pass configOverride for standalone use',
-    )
-  }
-  return _activeConfig
-}
 ```
+
+Note: no module-global state. `registerTools(server, config)` has `config` in scope and passes it to every `wrapTool` call. Tests do the same.
 
 - [ ] **Step 4: Run the `wrapTool` tests**
 
@@ -1394,7 +1378,6 @@ import type { Store } from '../db/store.js'
 import type { MutationRenderer } from '../rendering/generator.js'
 import type { Blog } from '../schema/index.js'
 import { registerTools } from './tools.js'
-import { setActiveConfig } from './wrap-tool.js'
 
 export interface McpServerConfig {
   store: Store
@@ -1417,7 +1400,6 @@ export interface McpServerConfig {
  * a single config object across both factories.
  */
 export function createMcpServer(config: McpServerConfig): McpServer {
-  setActiveConfig(config)
   const server = new McpServer({ name: '@slopit/core', version: '0.1.0' })
   registerTools(server, config)
   return server
@@ -1789,7 +1771,7 @@ describe('MCP tool: create_post', () => {
     })
     expect(result.isError).toBeFalsy()
     expect(result.structuredContent.post.slug).toBe('hello')
-    expect(result.structuredContent.post_url).toBe('https://b.example/hello')
+    expect(result.structuredContent.post_url).toBe('https://b.example/hello/')
   })
 
   it('missing title → SDK-shaped validation error', async () => {
