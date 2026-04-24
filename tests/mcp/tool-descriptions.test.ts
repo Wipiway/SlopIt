@@ -61,9 +61,10 @@ describe('MCP tool descriptions', () => {
       ).toBeLessThan(240)
       const lower = tool.description!.toLowerCase()
       for (const banned of BANNED) {
-        expect(lower, `tool "${tool.name}" description contains banned word "${banned}"`).not.toContain(
-          banned,
-        )
+        expect(
+          lower,
+          `tool "${tool.name}" description contains banned word "${banned}"`,
+        ).not.toContain(banned)
       }
     }
 

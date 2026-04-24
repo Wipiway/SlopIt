@@ -2789,7 +2789,7 @@ Implements spec "Required coverage areas — wrap-tool parity". Confirms that th
 **Files:**
 - Create: `tests/mcp/envelope-parity.test.ts`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `tests/mcp/envelope-parity.test.ts`:
 
@@ -2847,12 +2847,12 @@ describe('envelope parity across transports', () => {
 })
 ```
 
-- [ ] **Step 2: Run the test**
+- [x] **Step 2: Run the test**
 
 Run: `pnpm test -- tests/mcp/envelope-parity.test.ts`
 Expected: 7 passed (one per code).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/mcp/envelope-parity.test.ts
