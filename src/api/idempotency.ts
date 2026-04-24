@@ -2,6 +2,11 @@ import { createHash } from 'node:crypto'
 import type { MiddlewareHandler } from 'hono'
 import type { Store } from '../db/store.js'
 import { SlopItError } from '../errors.js'
+import {
+  lookupIdempotencyRecord,
+  recordIdempotencyResponse,
+  type IdempotencyScope,
+} from '../idempotency-store.js'
 import { respondError } from './errors.js'
 
 const APPLIES_TO = new Set<string>(['POST', 'PATCH', 'DELETE'])
@@ -10,26 +15,11 @@ export interface IdempotencyMiddlewareConfig {
   store: Store
 }
 
-type StoredRow = {
-  request_hash: string
-  response_status: number
-  response_body: string
-}
-
 /**
  * Idempotency-Key middleware. Applies to POST/PATCH/DELETE requests
- * carrying an Idempotency-Key header from an AUTHENTICATED caller. Replays
- * the stored response on match; 422 on mismatched payload; pass-through
- * with record-on-2xx otherwise. Weakened guarantee per spec decision #20
- * — recording happens after the handler commits, so a crash window
- * exists. See the spec's per-endpoint failure-mode table and SKILL.md.
- *
- * Scope = (key, api_key_hash, method, path). Requires c.var.apiKeyHash to
- * be a non-empty, caller-bound value. Unauthenticated mutations (e.g.
- * /signup) have no pre-auth identity, so sharing a scope across callers
- * would let a second caller replay the first caller's response — which
- * in /signup's case includes the api_key. Such requests pass through
- * without storage or replay; retrying /signup creates a fresh blog.
+ * carrying an Idempotency-Key header from an AUTHENTICATED caller.
+ * Delegates scope lookup/record to src/idempotency-store.ts (shared
+ * with MCP). Weakened guarantee per spec decision #20.
  */
 export function idempotencyMiddleware(
   config: IdempotencyMiddlewareConfig,
@@ -39,7 +29,6 @@ export function idempotencyMiddleware(
     const key = c.req.header('Idempotency-Key')
     if (!key) return next()
 
-    // No caller identity → skip idempotency entirely (see doc block above).
     const apiKeyHash = c.var.apiKeyHash ?? ''
     if (!apiKeyHash) return next()
 
@@ -60,42 +49,31 @@ export function idempotencyMiddleware(
     const hashInput = [method, path, contentType, queryString, rawBody].join('\0')
     const requestHash = createHash('sha256').update(hashInput).digest('hex')
 
-    const existing = config.store.db
-      .prepare(
-        `SELECT request_hash, response_status, response_body
-           FROM idempotency_keys
-          WHERE key = ? AND api_key_hash = ? AND method = ? AND path = ?`,
-      )
-      .get(key, apiKeyHash, method, path) as StoredRow | undefined
+    const scope: IdempotencyScope = { key, apiKeyHash, method, path, requestHash }
+    const result = lookupIdempotencyRecord(config.store, scope)
 
-    if (existing) {
-      if (existing.request_hash !== requestHash) {
-        const err = new SlopItError(
+    if (result.status === 'hit-mismatch') {
+      return respondError(
+        c,
+        new SlopItError(
           'IDEMPOTENCY_KEY_CONFLICT',
           `Idempotency-Key "${key}" already used with a different payload for ${method} ${path}`,
           { key, method, path },
-        )
-        return respondError(c, err)
-      }
-      // Replay stored response
-      return new Response(existing.response_body, {
-        status: existing.response_status,
+        ),
+      )
+    }
+    if (result.status === 'hit-match') {
+      return new Response(result.body, {
+        status: result.responseStatus,
         headers: { 'Content-Type': 'application/json' },
       })
     }
 
-    // Miss — run handler, capture response
     await next()
     const status = c.res.status
     if (status < 200 || status >= 300) return
 
     const body = await c.res.clone().text()
-    config.store.db
-      .prepare(
-        `INSERT INTO idempotency_keys
-           (key, api_key_hash, method, path, request_hash, response_status, response_body)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(key, apiKeyHash, method, path, requestHash, status, body)
+    recordIdempotencyResponse(config.store, scope, body, status)
   }
 }
