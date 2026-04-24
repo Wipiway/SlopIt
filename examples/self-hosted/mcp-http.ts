@@ -6,7 +6,7 @@
  * Authorization header on the HTTP request, propagated into
  * extra.requestInfo.headers for resolveBearer.
  *
- * Run: tsx examples/self-hosted/mcp-http.ts
+ * Run: pnpm dlx tsx examples/self-hosted/mcp-http.ts
  */
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
@@ -38,8 +38,9 @@ async function main(): Promise<void> {
   await mcp.connect(transport)
 
   const app = new Hono()
-  app.route('/', api)
+  // MCP route registered first so it isn't swallowed by the REST router's catch-all auth middleware
   app.all('/mcp', (c) => transport.handleRequest(c.req.raw))
+  app.route('/', api)
 
   serve({ fetch: app.fetch, port: Number(process.env.PORT ?? 8080) })
 }

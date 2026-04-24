@@ -5,7 +5,7 @@
  * desktop-agent scenario. Idempotency is api_key-mode only
  * (spec decision #16), so retries on this transport re-execute.
  *
- * Run: tsx examples/self-hosted/mcp-stdio.ts
+ * Run: pnpm dlx tsx examples/self-hosted/mcp-stdio.ts
  */
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createMcpServer } from '../../src/mcp/server.js'
