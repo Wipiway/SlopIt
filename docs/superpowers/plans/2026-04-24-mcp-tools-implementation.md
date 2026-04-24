@@ -1336,7 +1336,7 @@ describe('createMcpServer', () => {
     expect(server).toBeInstanceOf(McpServer)
   })
 
-  it('connects to an InMemoryTransport and listTools resolves', async () => {
+  it('connects to an InMemoryTransport cleanly', async () => {
     const renderer = createRenderer({
       store,
       outputDir: join(dir, 'out'),
@@ -1348,16 +1348,12 @@ describe('createMcpServer', () => {
       baseUrl: 'https://api.example',
     })
     const [clientT, serverT] = InMemoryTransport.createLinkedPair()
-    await server.connect(serverT)
-    const client = new Client({ name: 'test', version: '0' }, {})
-    await client.connect(clientT)
+    // SDK 1.29 only registers tools/list lazily on first registerTool call;
+    // an empty server would fail a listTools() assertion here. tools/list is
+    // exercised naturally starting in Task 7 (signup test) and formally
+    // asserted in Task 13 (tool-descriptions guard).
+    await expect(server.connect(serverT)).resolves.not.toThrow()
 
-    const tools = await client.listTools()
-    // Tools land in Phase 2; for now we just assert the call resolves.
-    expect(tools).toHaveProperty('tools')
-    expect(Array.isArray(tools.tools)).toBe(true)
-
-    await client.close()
     await server.close()
   })
 })
@@ -1613,6 +1609,7 @@ export function registerTools(server: McpServer, config: McpServerConfig): void 
       inputSchema: CreateBlogInputSchema.strict(),
     },
     wrapTool<{ name?: string; theme?: 'minimal' }>(
+      config,
       'signup',
       { auth: 'public' },
       (args) => {
@@ -1696,6 +1693,7 @@ import { createStore, type Store } from '../../src/db/store.js'
 import { createApiKey, createBlog } from '../../src/blogs.js'
 import { createRenderer } from '../../src/rendering/generator.js'
 import { createMcpServer } from '../../src/mcp/server.js'
+import { attachAuth, callTool } from './helpers.js'
 
 describe('MCP tool: create_post', () => {
   let dir: string
@@ -1720,6 +1718,7 @@ describe('MCP tool: create_post', () => {
     const [clientT, serverT] = InMemoryTransport.createLinkedPair()
     await server.connect(serverT)
     const c = new Client({ name: 'test', version: '0' }, {})
+    attachAuth(clientT, apiKey)
     await c.connect(clientT)
     client = c
     closer = async () => {
@@ -1728,26 +1727,15 @@ describe('MCP tool: create_post', () => {
     }
   }
 
-  const call = (args: Record<string, unknown>) =>
-    client.request(
-      {
-        method: 'tools/call',
-        params: { name: 'create_post', arguments: args, _meta: { authInfo: { token: apiKey } } },
-      },
-      // deliberately don't constrain the result schema for test compatibility
-      // callTool uses InMemoryTransport.send — we use the lower-level
-      // route to also attach authInfo on send (see note below)
-    ) as never
-
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'slopit-mcp-create-'))
     store = createStore({ dbPath: join(dir, 'test.db') })
-    await boot()
     const blog = createBlog(store, { name: 'bb' }).blog
     blogId = blog.id
     apiKey = createApiKey(store, blogId).apiKey
     const other = createBlog(store, { name: 'other' }).blog
     otherBlogId = other.id
+    await boot()
   })
 
   afterEach(async () => {
@@ -1756,15 +1744,8 @@ describe('MCP tool: create_post', () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  // Helper that wraps callTool with authInfo injection. See tests/mcp/helpers.ts
-  // (Task 8 step 3) for the shared helper.
-  const authedCall = async (args: Record<string, unknown>) => {
-    const { callToolWithAuth } = await import('./helpers.js')
-    return callToolWithAuth(client, { name: 'create_post', arguments: args, apiKey })
-  }
-
   it('happy path: publishes a post and returns post + post_url', async () => {
-    const result = await authedCall({
+    const result = await callTool(client, 'create_post', {
       blog_id: blogId,
       title: 'Hello',
       body: '# Hi\n\nBody.',
@@ -1775,14 +1756,14 @@ describe('MCP tool: create_post', () => {
   })
 
   it('missing title → SDK-shaped validation error', async () => {
-    const result = await authedCall({ blog_id: blogId, body: 'x' })
+    const result = await callTool(client, 'create_post', { blog_id: blogId, body: 'x' })
     expect(result.isError).toBe(true)
     expect(result.content[0].text).toContain('Input validation error')
     expect(result.structuredContent).toBeUndefined()
   })
 
   it('cross-blog guard: other blog_id → BLOG_NOT_FOUND envelope', async () => {
-    const result = await authedCall({
+    const result = await callTool(client, 'create_post', {
       blog_id: otherBlogId,
       title: 'x',
       body: 'y',
@@ -1792,13 +1773,13 @@ describe('MCP tool: create_post', () => {
   })
 
   it('idempotency replay: same key + same args → identical response', async () => {
-    const first = await authedCall({
+    const first = await callTool(client, 'create_post', {
       blog_id: blogId,
       title: 'Idem',
       body: 'x',
       idempotency_key: 'k-create-1',
     })
-    const second = await authedCall({
+    const second = await callTool(client, 'create_post', {
       blog_id: blogId,
       title: 'Idem',
       body: 'x',
@@ -1810,13 +1791,13 @@ describe('MCP tool: create_post', () => {
   })
 
   it('idempotency mismatch: same key + different args → IDEMPOTENCY_KEY_CONFLICT', async () => {
-    await authedCall({
+    await callTool(client, 'create_post', {
       blog_id: blogId,
       title: 'A',
       body: 'x',
       idempotency_key: 'k-create-2',
     })
-    const result = await authedCall({
+    const result = await callTool(client, 'create_post', {
       blog_id: blogId,
       title: 'B',
       body: 'x',
@@ -1827,54 +1808,15 @@ describe('MCP tool: create_post', () => {
   })
 
   it('POST_SLUG_CONFLICT on duplicate explicit slug (no idempotency)', async () => {
-    await authedCall({ blog_id: blogId, title: 'A', slug: 'same', body: 'x' })
-    const result = await authedCall({ blog_id: blogId, title: 'B', slug: 'same', body: 'y' })
+    await callTool(client, 'create_post', { blog_id: blogId, title: 'A', slug: 'same', body: 'x' })
+    const result = await callTool(client, 'create_post', { blog_id: blogId, title: 'B', slug: 'same', body: 'y' })
     expect(result.isError).toBe(true)
     expect(result.structuredContent.error.code).toBe('POST_SLUG_CONFLICT')
   })
 })
 ```
 
-- [ ] **Step 2: Create the shared test helper `tests/mcp/helpers.ts`**
-
-```ts
-import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js'
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
-
-/**
- * Call a tool with a bearer token propagated via the transport's
- * authInfo hook. InMemoryTransport.send supports { authInfo }, which
- * lands in extra.authInfo on the server side — resolveBearer reads it.
- */
-export async function callToolWithAuth(
-  client: Client,
-  opts: { name: string; arguments?: Record<string, unknown>; apiKey: string },
-): Promise<
-  CallToolResult & {
-    structuredContent: Record<string, unknown> & { error?: { code: string } }
-  }
-> {
-  const result = (await client.request(
-    {
-      method: 'tools/call',
-      params: { name: opts.name, arguments: opts.arguments ?? {} },
-    },
-    CallToolResultSchema,
-    { authInfo: { token: opts.apiKey } },
-  )) as CallToolResult
-
-  return result as CallToolResult & {
-    structuredContent: Record<string, unknown> & { error?: { code: string } }
-  }
-}
-```
-
-(Verify that the `client.request(..., { authInfo })` option exists on `Protocol` — if not, the alternative is to monkey-patch `clientT.send` to decorate every outgoing message with `authInfo`. See step 3 below.)
-
-- [ ] **Step 3: If `client.request` doesn't accept `authInfo`, patch the transport instead**
-
-If step 2's approach compiles but `authInfo` isn't threaded (`resolveBearer` in `wrapTool` tests will show it), replace `callToolWithAuth` with a transport-patching version:
+- [ ] **Step 2: Create `tests/mcp/helpers.ts`**
 
 ```ts
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -1883,30 +1825,30 @@ import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 
 /**
- * Monkey-patch the in-memory transport so every outgoing message carries
- * authInfo. Ugly but scoped to test setup (spec decision: test plumbing
- * can be ugly).
+ * Wrap the client-side InMemoryTransport so every outgoing message
+ * carries authInfo. SDK exposes send({ authInfo }) natively; that
+ * flows into extra.authInfo on the server side, which resolveBearer
+ * reads. Test-only; production HTTP transport reads headers.
  */
-export function withAuthOnTransport(transport: InMemoryTransport, token: string): void {
-  const originalSend = transport.send.bind(transport)
+export function attachAuth(transport: InMemoryTransport, token: string): void {
+  const original = transport.send.bind(transport)
   transport.send = (message, options) =>
-    originalSend(message, { ...(options ?? {}), authInfo: { token, clientId: 'test', scopes: [] } })
+    original(message, { ...(options ?? {}), authInfo: { token, clientId: 'test', scopes: [] } })
 }
 
-export async function callToolWithAuth(
+export async function callTool(
   client: Client,
-  opts: { name: string; arguments?: Record<string, unknown> },
+  name: string,
+  args: Record<string, unknown> = {},
 ): Promise<CallToolResult> {
   return (await client.request(
-    { method: 'tools/call', params: { name: opts.name, arguments: opts.arguments ?? {} } },
+    { method: 'tools/call', params: { name, arguments: args } },
     CallToolResultSchema,
   )) as CallToolResult
 }
 ```
 
-Then the test's `boot` helper accepts an `apiKey` arg and calls `withAuthOnTransport(clientT, apiKey)` before `client.connect(clientT)`. Pick whichever approach works. Start with step 2 (preferred — no monkey-patch); fall back to step 3 only if step 2 doesn't wire through.
-
-- [ ] **Step 4: Add `create_post` to `src/mcp/tools.ts`**
+- [ ] **Step 3: Add `create_post` to `src/mcp/tools.ts`**
 
 Append inside `registerTools`:
 
@@ -1927,6 +1869,7 @@ server.registerTool(
     inputSchema: CreatePostInputSchema,
   },
   wrapTool<{ blog_id: string; idempotency_key?: string; title: string; body: string; [k: string]: unknown }>(
+    config,
     'create_post',
     { auth: 'required', idempotent: true, crossBlogGuard: true },
     (args, ctx) => {
@@ -1950,12 +1893,12 @@ import { PostInputBaseSchema, slugTitleRefinement } from '../schema/post-input-b
 import { createPost } from '../posts.js'
 ```
 
-- [ ] **Step 5: Run create_post tests**
+- [ ] **Step 4: Run create_post tests**
 
 Run: `pnpm test -- tests/mcp/posts-create.test.ts`
 Expected: 6 passed.
 
-- [ ] **Step 6: Full check + commit**
+- [ ] **Step 5: Full check + commit**
 
 Run: `pnpm check`
 Expected: 345 + 6 = 351 tests pass.
@@ -1998,9 +1941,9 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { createStore, type Store } from '../../src/db/store.js'
 import { createApiKey, createBlog } from '../../src/blogs.js'
 import { createRenderer } from '../../src/rendering/generator.js'
-import { createPost } from '../../src/posts.js'
+import { createPost, getPost } from '../../src/posts.js'
 import { createMcpServer } from '../../src/mcp/server.js'
-import { callToolWithAuth } from './helpers.js'
+import { attachAuth, callTool } from './helpers.js'
 
 describe('MCP tool: update_post', () => {
   let dir: string
@@ -2024,6 +1967,7 @@ describe('MCP tool: update_post', () => {
     const [clientT, serverT] = InMemoryTransport.createLinkedPair()
     await server.connect(serverT)
     const c = new Client({ name: 'test', version: '0' }, {})
+    attachAuth(clientT, apiKey)
     await c.connect(clientT)
     client = c
     closer = async () => {
@@ -2050,17 +1994,12 @@ describe('MCP tool: update_post', () => {
   })
 
   it('published → published preserves published_at', async () => {
-    const before = await callToolWithAuth(client, {
-      name: 'get_post',
-      arguments: { blog_id: blogId, slug: 'seed' },
-      apiKey,
-    })
-    const firstPubAt = (before.structuredContent.post as { publishedAt: string }).publishedAt
+    const firstPubAt = getPost(store, blogId, 'seed').publishedAt
 
-    const result = await callToolWithAuth(client, {
-      name: 'update_post',
-      arguments: { blog_id: blogId, slug: 'seed', patch: { body: 'Edited' } },
-      apiKey,
+    const result = await callTool(client, 'update_post', {
+      blog_id: blogId,
+      slug: 'seed',
+      patch: { body: 'Edited' },
     })
     expect(result.isError).toBeFalsy()
     const post = result.structuredContent.post as { publishedAt: string; body: string }
@@ -2069,30 +2008,30 @@ describe('MCP tool: update_post', () => {
   })
 
   it('slug in patch → SDK-shaped validation error', async () => {
-    const result = await callToolWithAuth(client, {
-      name: 'update_post',
-      arguments: { blog_id: blogId, slug: 'seed', patch: { slug: 'new-slug' } },
-      apiKey,
+    const result = await callTool(client, 'update_post', {
+      blog_id: blogId,
+      slug: 'seed',
+      patch: { slug: 'new-slug' },
     })
     expect(result.isError).toBe(true)
     expect(result.content[0].text).toContain('Input validation error')
   })
 
   it('empty patch → returns current post unchanged', async () => {
-    const result = await callToolWithAuth(client, {
-      name: 'update_post',
-      arguments: { blog_id: blogId, slug: 'seed', patch: {} },
-      apiKey,
+    const result = await callTool(client, 'update_post', {
+      blog_id: blogId,
+      slug: 'seed',
+      patch: {},
     })
     expect(result.isError).toBeFalsy()
     expect((result.structuredContent.post as { slug: string }).slug).toBe('seed')
   })
 
   it('published → draft deletes the post file (DB still has the row)', async () => {
-    const result = await callToolWithAuth(client, {
-      name: 'update_post',
-      arguments: { blog_id: blogId, slug: 'seed', patch: { status: 'draft' } },
-      apiKey,
+    const result = await callTool(client, 'update_post', {
+      blog_id: blogId,
+      slug: 'seed',
+      patch: { status: 'draft' },
     })
     expect(result.isError).toBeFalsy()
     expect((result.structuredContent.post as { status: string }).status).toBe('draft')
@@ -2102,24 +2041,12 @@ describe('MCP tool: update_post', () => {
 })
 ```
 
-- [ ] **Step 2: Run — fails (tool not registered, and `get_post` also not yet)**
+- [ ] **Step 2: Run — fails (tool not registered)**
 
 Run: `pnpm test -- tests/mcp/posts-update.test.ts`
-Expected: failures on tool-not-found (the `get_post` call in test #1 will fail; we'll add both tools in this task and Task 11 — adjust order or inline the read via store). See step 3's note.
+Expected: failures on tool-not-found. The test uses `getPost` from the store directly (no `get_post` MCP tool dependency), so Task 11 is not a prerequisite.
 
-- [ ] **Step 3: Use direct store reads in the test setup instead of `get_post`**
-
-Replace the "published → published preserves published_at" test's `before = await callToolWithAuth(..., 'get_post', ...)` with a direct primitive call:
-
-```ts
-import { getPost } from '../../src/posts.js'
-// ...
-const firstPubAt = getPost(store, blogId, 'seed').publishedAt
-```
-
-Only then does this task not depend on `get_post`. Adjust the imports accordingly.
-
-- [ ] **Step 4: Add `update_post` registration to `src/mcp/tools.ts`**
+- [ ] **Step 3: Add `update_post` registration to `src/mcp/tools.ts`**
 
 Append inside `registerTools` (after `create_post`):
 
@@ -2142,6 +2069,7 @@ server.registerTool(
     inputSchema: UpdatePostInputSchema,
   },
   wrapTool<{ blog_id: string; slug: string; patch: Record<string, unknown>; idempotency_key?: string }>(
+    config,
     'update_post',
     { auth: 'required', idempotent: true, crossBlogGuard: true },
     (args, ctx) => {
@@ -2169,12 +2097,12 @@ import { PostPatchSchema } from '../schema/index.js'
 import { updatePost } from '../posts.js'
 ```
 
-- [ ] **Step 5: Run the update_post tests**
+- [ ] **Step 4: Run the update_post tests**
 
 Run: `pnpm test -- tests/mcp/posts-update.test.ts`
 Expected: 4 passed.
 
-- [ ] **Step 6: `pnpm check` + commit**
+- [ ] **Step 5: `pnpm check` + commit**
 
 Run: `pnpm check`
 Expected: 351 + 4 = 355 tests pass.
@@ -2218,7 +2146,7 @@ import { createApiKey, createBlog } from '../../src/blogs.js'
 import { createRenderer } from '../../src/rendering/generator.js'
 import { createPost } from '../../src/posts.js'
 import { createMcpServer } from '../../src/mcp/server.js'
-import { callToolWithAuth } from './helpers.js'
+import { attachAuth, callTool } from './helpers.js'
 
 describe('MCP tool: delete_post', () => {
   let dir: string
@@ -2243,6 +2171,7 @@ describe('MCP tool: delete_post', () => {
     const [clientT, serverT] = InMemoryTransport.createLinkedPair()
     await server.connect(serverT)
     const c = new Client({ name: 'test', version: '0' }, {})
+    attachAuth(clientT, apiKey)
     await c.connect(clientT)
     client = c
     closer = async () => {
@@ -2270,51 +2199,35 @@ describe('MCP tool: delete_post', () => {
   })
 
   it('happy path returns { deleted: true }', async () => {
-    const result = await callToolWithAuth(client, {
-      name: 'delete_post',
-      arguments: { blog_id: blogId, slug: 'seed' },
-      apiKey,
-    })
+    const result = await callTool(client, 'delete_post', { blog_id: blogId, slug: 'seed' })
     expect(result.isError).toBeFalsy()
     expect(result.structuredContent).toEqual({ deleted: true })
   })
 
   it('same-key retry replays { deleted: true } (hit-match)', async () => {
-    const first = await callToolWithAuth(client, {
-      name: 'delete_post',
-      arguments: { blog_id: blogId, slug: 'seed', idempotency_key: 'k-del-1' },
-      apiKey,
+    const first = await callTool(client, 'delete_post', {
+      blog_id: blogId,
+      slug: 'seed',
+      idempotency_key: 'k-del-1',
     })
-    const second = await callToolWithAuth(client, {
-      name: 'delete_post',
-      arguments: { blog_id: blogId, slug: 'seed', idempotency_key: 'k-del-1' },
-      apiKey,
+    const second = await callTool(client, 'delete_post', {
+      blog_id: blogId,
+      slug: 'seed',
+      idempotency_key: 'k-del-1',
     })
     expect(first.structuredContent).toEqual({ deleted: true })
     expect(second.structuredContent).toEqual({ deleted: true })
   })
 
   it('no-key retry after successful delete → POST_NOT_FOUND envelope', async () => {
-    await callToolWithAuth(client, {
-      name: 'delete_post',
-      arguments: { blog_id: blogId, slug: 'seed' },
-      apiKey,
-    })
-    const retry = await callToolWithAuth(client, {
-      name: 'delete_post',
-      arguments: { blog_id: blogId, slug: 'seed' },
-      apiKey,
-    })
+    await callTool(client, 'delete_post', { blog_id: blogId, slug: 'seed' })
+    const retry = await callTool(client, 'delete_post', { blog_id: blogId, slug: 'seed' })
     expect(retry.isError).toBe(true)
     expect(retry.structuredContent.error?.code).toBe('POST_NOT_FOUND')
   })
 
   it('cross-blog guard: blog_id mismatch → BLOG_NOT_FOUND', async () => {
-    const result = await callToolWithAuth(client, {
-      name: 'delete_post',
-      arguments: { blog_id: otherBlogId, slug: 'seed' },
-      apiKey,
-    })
+    const result = await callTool(client, 'delete_post', { blog_id: otherBlogId, slug: 'seed' })
     expect(result.isError).toBe(true)
     expect(result.structuredContent.error?.code).toBe('BLOG_NOT_FOUND')
   })
@@ -2347,6 +2260,7 @@ server.registerTool(
     inputSchema: DeletePostInputSchema,
   },
   wrapTool<{ blog_id: string; slug: string; idempotency_key?: string }>(
+    config,
     'delete_post',
     { auth: 'required', idempotent: true, crossBlogGuard: true },
     (args, ctx) => {
@@ -2412,7 +2326,7 @@ import { createApiKey, createBlog } from '../../src/blogs.js'
 import { createRenderer } from '../../src/rendering/generator.js'
 import { createPost } from '../../src/posts.js'
 import { createMcpServer } from '../../src/mcp/server.js'
-import { callToolWithAuth } from './helpers.js'
+import { attachAuth, callTool } from './helpers.js'
 
 describe('MCP read tools', () => {
   let dir: string
@@ -2436,6 +2350,7 @@ describe('MCP read tools', () => {
     const [clientT, serverT] = InMemoryTransport.createLinkedPair()
     await server.connect(serverT)
     const c = new Client({ name: 'test', version: '0' }, {})
+    attachAuth(clientT, apiKey)
     await c.connect(clientT)
     client = c
     closer = async () => {
@@ -2467,41 +2382,25 @@ describe('MCP read tools', () => {
   })
 
   it('get_blog returns { blog }', async () => {
-    const result = await callToolWithAuth(client, {
-      name: 'get_blog',
-      arguments: { blog_id: blogId },
-      apiKey,
-    })
+    const result = await callTool(client, 'get_blog', { blog_id: blogId })
     expect(result.isError).toBeFalsy()
     expect((result.structuredContent.blog as { id: string }).id).toBe(blogId)
   })
 
   it('get_post happy path', async () => {
-    const result = await callToolWithAuth(client, {
-      name: 'get_post',
-      arguments: { blog_id: blogId, slug: 'pub1' },
-      apiKey,
-    })
+    const result = await callTool(client, 'get_post', { blog_id: blogId, slug: 'pub1' })
     expect(result.isError).toBeFalsy()
     expect((result.structuredContent.post as { slug: string }).slug).toBe('pub1')
   })
 
   it('get_post miss → POST_NOT_FOUND envelope', async () => {
-    const result = await callToolWithAuth(client, {
-      name: 'get_post',
-      arguments: { blog_id: blogId, slug: 'nope' },
-      apiKey,
-    })
+    const result = await callTool(client, 'get_post', { blog_id: blogId, slug: 'nope' })
     expect(result.isError).toBe(true)
     expect(result.structuredContent.error?.code).toBe('POST_NOT_FOUND')
   })
 
   it('list_posts default returns published only', async () => {
-    const result = await callToolWithAuth(client, {
-      name: 'list_posts',
-      arguments: { blog_id: blogId },
-      apiKey,
-    })
+    const result = await callTool(client, 'list_posts', { blog_id: blogId })
     expect(result.isError).toBeFalsy()
     const posts = result.structuredContent.posts as { slug: string; status: string }[]
     expect(posts).toHaveLength(1)
@@ -2509,11 +2408,7 @@ describe('MCP read tools', () => {
   })
 
   it("list_posts status: 'draft' returns drafts only", async () => {
-    const result = await callToolWithAuth(client, {
-      name: 'list_posts',
-      arguments: { blog_id: blogId, status: 'draft' },
-      apiKey,
-    })
+    const result = await callTool(client, 'list_posts', { blog_id: blogId, status: 'draft' })
     expect(result.isError).toBeFalsy()
     const posts = result.structuredContent.posts as { slug: string; status: string }[]
     expect(posts).toHaveLength(1)
@@ -2540,6 +2435,7 @@ server.registerTool(
     inputSchema: z.object({ blog_id: z.string() }).strict(),
   },
   wrapTool<{ blog_id: string }>(
+    config,
     'get_blog',
     { auth: 'required', crossBlogGuard: true },
     (_args, ctx) => ({ blog: ctx.blog! }),
@@ -2554,6 +2450,7 @@ server.registerTool(
     inputSchema: z.object({ blog_id: z.string(), slug: z.string() }).strict(),
   },
   wrapTool<{ blog_id: string; slug: string }>(
+    config,
     'get_post',
     { auth: 'required', crossBlogGuard: true },
     (args, ctx) => ({ post: getPost(config.store, ctx.blog!.id, args.slug) }),
@@ -2576,6 +2473,7 @@ server.registerTool(
     inputSchema: ListPostsInputSchema,
   },
   wrapTool<{ blog_id: string; status?: 'draft' | 'published' }>(
+    config,
     'list_posts',
     { auth: 'required', crossBlogGuard: true },
     (args, ctx) => ({
@@ -2733,7 +2631,7 @@ server.registerTool(
       details: z.unknown().optional(),
     }),
   },
-  wrapTool('report_bug', { auth: 'public' }, () => {
+  wrapTool(config, 'report_bug', { auth: 'public' }, () => {
     throw new SlopItError(
       'NOT_IMPLEMENTED',
       'Bug reports are handled by the platform, not core',
@@ -3028,7 +2926,7 @@ main().catch((err) => {
 /**
  * Self-hosted MCP over HTTP example.
  *
- * Mounts StreamableHTTPServerTransport under Hono at /mcp alongside the
+ * Mounts WebStandardStreamableHTTPServerTransport under Hono at /mcp alongside the
  * REST router. authMode: 'api_key' — bearer arrives in the
  * Authorization header on the HTTP request, propagated into
  * extra.requestInfo.headers for resolveBearer.
@@ -3037,7 +2935,7 @@ main().catch((err) => {
  */
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { createApiRouter } from '../../src/api/index.js'
 import { createMcpServer } from '../../src/mcp/server.js'
 import { createRenderer } from '../../src/rendering/generator.js'
@@ -3061,17 +2959,12 @@ async function main(): Promise<void> {
 
   const api = createApiRouter(apiConfig)
   const mcp = createMcpServer(apiConfig)
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
+  const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined })
   await mcp.connect(transport)
 
   const app = new Hono()
   app.route('/', api)
-  app.all('/mcp', async (c) => {
-    // Adapt Hono's Request/Response to the transport's handleRequest.
-    const req = c.req.raw
-    const res = await transport.handleRequest(req)
-    return res
-  })
+  app.all('/mcp', (c) => transport.handleRequest(c.req.raw))
 
   serve({ fetch: app.fetch, port: Number(process.env.PORT ?? 8080) })
 }
@@ -3085,7 +2978,7 @@ main().catch((err) => {
 - [ ] **Step 3: Verify the files compile with project tsconfig**
 
 Run: `pnpm typecheck`
-Expected: no type errors. If `@hono/node-server` is missing from deps, add it: `pnpm add @hono/node-server` (only for examples). If `StreamableHTTPServerTransport` has a different constructor signature in the installed SDK version, adjust the example (check `node_modules/@modelcontextprotocol/sdk/dist/esm/server/streamableHttp.d.ts`).
+Expected: no type errors. If `@hono/node-server` is missing from deps, add it: `pnpm add @hono/node-server` (only for examples). If `WebStandardStreamableHTTPServerTransport` has a different constructor signature in the installed SDK version, adjust the example (check `node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.d.ts`).
 
 - [ ] **Step 4: Run the full check**
 
