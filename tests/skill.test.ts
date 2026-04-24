@@ -16,7 +16,15 @@ describe('generateSkillFile', () => {
   })
 
   it('has all required sections in fixed order', () => {
-    const sections = ['What SlopIt is', 'Auth', 'Endpoints', 'Schema', 'Error codes', 'Idempotency']
+    const sections = [
+      'What SlopIt is',
+      'Auth',
+      'Endpoints',
+      'Schema',
+      'Error codes',
+      'Idempotency',
+      'MCP tools',
+    ]
     let lastIdx = -1
     for (const section of sections) {
       const idx = text.indexOf(`## ${section}`)
@@ -90,10 +98,21 @@ describe('generateSkillFile', () => {
     expect(text).toMatch(/GET \/schema/)
   })
 
-  it('does NOT list MCP tools (deferred to feat/mcp-tools)', () => {
-    // MCP tools table is intentionally omitted this feature; assert
-    // the section heading is not present.
-    expect(text).not.toMatch(/## MCP tools/i)
+  it('includes the MCP tools section with all 8 tool names', () => {
+    expect(text).toContain('## MCP tools')
+    const tools = [
+      'signup',
+      'create_post',
+      'update_post',
+      'delete_post',
+      'get_blog',
+      'get_post',
+      'list_posts',
+      'report_bug',
+    ]
+    for (const tool of tools) {
+      expect(text, `MCP section missing tool: ${tool}`).toContain(tool)
+    }
   })
 })
 
