@@ -53,12 +53,12 @@ MCP is configured through the same shape as REST: `createMcpServer(config)` take
 | `src/mcp/tools.ts` | NEW | `registerTools(server, config): void`. The 8 tool registrations + their business handlers. |
 | `src/mcp/wrap-tool.ts` | NEW | `wrapTool(name, opts, business): ToolCallback`. Auth + cross-blog + idempotency + error-envelope pipeline in one place. |
 | `src/mcp/auth.ts` | NEW | `resolveBearer(extra, config): string \| null`. Reads `Authorization: Bearer` from `extra.requestInfo?.headers` case-insensitively (the SDK's `IsomorphicHeaders` is a plain record, not a `Headers` instance — Streamable HTTP lowercases but other transports may not); `null` under `authMode: 'none'`. |
-| `src/idempotency-store.ts` | NEW | Transport-agnostic. `lookupIdempotencyRecord(store, scope): { status: 'miss' } \| { status: 'hit-match', body: string } \| { status: 'hit-mismatch' }` + `recordIdempotencyResponse(store, scope, body): void`. Shared `idempotency_keys` table. |
+| `src/idempotency-store.ts` | NEW | Transport-agnostic. `lookupIdempotencyRecord(store, scope): { status: 'miss' } \| { status: 'hit-match', body: string, responseStatus: number } \| { status: 'hit-mismatch' }` + `recordIdempotencyResponse(store, scope, body, responseStatus): void`. Shared `idempotency_keys` table. |
 | `src/envelope.ts` | NEW | `mapErrorToEnvelope(err): Envelope` where `Envelope = { code, message, details, statusHint }`. Deterministic but has one side effect — `console.error` on unhandled errors so a single log line fires regardless of transport. |
 | `src/api/errors.ts` | MODIFY | `respondError` delegates to `mapErrorToEnvelope`. External shape unchanged; `errorMiddleware` signature unchanged. Also strips `statusHint` from the wire envelope. |
 | `src/api/idempotency.ts` | MODIFY | Hono middleware delegates the DB-touching parts (`SELECT` / `INSERT` + scope-tuple lookup) to `src/idempotency-store.ts`. Keeps Hono-specific request/response handling (body re-expose, `c.res` capture). |
 | `src/skill.ts` | MODIFY (Tier 2) | Append "## MCP tools" section listing the 8 tools + "signup is not idempotent" caveat + "canonical-JSON hash for MCP" caveat. |
-| `src/index.ts` | MODIFY | Swap `createMcpServer` stub body. Update `McpServerConfig` shape. No new barrel exports. |
+| `src/index.ts` | MODIFY | Swap `createMcpServer` stub body. Update `McpServerConfig` shape. No new barrel exports — the `PostInputBaseSchema` + `slugTitleRefinement` primitives needed by MCP live in an internal submodule (`src/schema/post-input-base.ts`) that's not re-exported from the barrel. |
 | `tests/mcp/signup.test.ts` | NEW | Happy path; `BLOG_NAME_CONFLICT`; regression guard that `idempotency_key` in args is rejected by the schema. |
 | `tests/mcp/posts-create.test.ts` | NEW | Happy path; cross-blog guard; idempotency replay + `IDEMPOTENCY_KEY_CONFLICT` on mismatch; `POST_SLUG_CONFLICT`; missing-title returns SDK-shaped validation error (decision #15). |
 | `tests/mcp/posts-update.test.ts` | NEW | Each row of the REST render matrix; slug-in-patch rejected; no-op empty patch. |
@@ -70,7 +70,8 @@ MCP is configured through the same shape as REST: `createMcpServer(config)` take
 | `tests/mcp/tool-descriptions.test.ts` | NEW | Structural assertions on all 8 descriptions: length < 240 chars, banned vocabulary absent. |
 | `tests/mcp/skill-parity.test.ts` | NEW (Tier 2) | Set of tools in a fresh `McpServer` matches the set of tools documented in `generateSkillFile` output. |
 | `tests/idempotency-store.test.ts` | NEW | `miss` / `hit-match` / `hit-mismatch` dispatch; scope isolation; defensive assert on empty `apiKeyHash`. |
-| `src/schema/index.ts` | MODIFY | Export `PostInputBaseSchema` (currently private) so `create_post`'s MCP input schema can extend its shape. No external change to `PostInputSchema` / `PostPatchSchema`. |
+| `src/schema/post-input-base.ts` | NEW | Internal module (not re-exported via `src/schema/index.ts` barrel). Owns `PostInputBaseSchema` (currently a private const in `src/schema/index.ts`) and `slugTitleRefinement` — a named export of the `superRefine` callback currently inlined in `PostInputSchema`'s definition. Both `src/schema/index.ts` (for building `PostInputSchema`) and `src/mcp/tools.ts` (for `create_post`) import from here. |
+| `src/schema/index.ts` | MODIFY | Replace the inline `PostInputBaseSchema` const + inline `superRefine` callback with imports from `./post-input-base.js`. No change to the barrel's public surface — `PostInputSchema`, `PostPatchSchema`, `PostSchema`, `CreateBlogInputSchema`, and their inferred types stay exported exactly as before. |
 | `examples/self-hosted/mcp-stdio.ts` | NEW (Tier 2) | ~30 lines. `createMcpServer({ ..., authMode: 'none' })` + `StdioServerTransport`. |
 | `examples/self-hosted/mcp-http.ts` | NEW (Tier 2) | ~60 lines. `createMcpServer({ ..., authMode: 'api_key' })` + `StreamableHTTPServerTransport` mounted under Hono at `/mcp` alongside REST. |
 
@@ -230,7 +231,7 @@ All input schemas are Zod. `z.strict()` is applied at the top level to reject ex
 | # | Name | Auth | Idem. | CrossBlog | Input schema | Output |
 |---|------|------|-------|-----------|--------------|--------|
 | 1 | `signup` | public | ❌ | — | `CreateBlogInputSchema.strict()` | `{ blog_id, blog_url, api_key, mcp_endpoint?, onboarding_text }` |
-| 2 | `create_post` | required | ✅ | ✅ | `z.object({ blog_id: string }).extend(PostInputBaseSchema.shape).extend({ idempotency_key: z.string().optional() }).strict().superRefine(slugCheck)` | `{ post, post_url? }` |
+| 2 | `create_post` | required | ✅ | ✅ | `z.object({ blog_id: string }).extend(PostInputBaseSchema.shape).extend({ idempotency_key: z.string().optional() }).strict().superRefine(slugTitleRefinement)` (both imported from `src/schema/post-input-base.ts`) | `{ post, post_url? }` |
 | 3 | `update_post` | required | ✅ | ✅ | `z.object({ blog_id, slug, patch: PostPatchSchema, idempotency_key? }).strict()` | `{ post, post_url? }` |
 | 4 | `delete_post` | required | ✅ | ✅ | `z.object({ blog_id, slug, idempotency_key? }).strict()` | `{ deleted: true }` |
 | 5 | `get_blog` | required | — | ✅ | `z.object({ blog_id }).strict()` | `{ blog }` |
@@ -241,7 +242,7 @@ All input schemas are Zod. `z.strict()` is applied at the top level to reject ex
 ### Notes per tool
 
 - **`signup`** — Calls `createBlog` → `createApiKey` → `generateOnboardingBlock` with `blogUrl = rendererFor(blog).baseUrl`. Result field `onboarding_text` carries the imperative onboarding string (matches REST). `mcp_endpoint` field included when `config.mcpEndpoint` is set. `idempotency_key` is rejected at the SDK's schema validation layer (`CreateBlogInputSchema.strict()` does not include it); the client receives an SDK-shaped validation error before `wrapTool` runs (decision #15).
-- **`create_post`** — Input is `{ blog_id }` plus every `PostInputSchema` field plus optional `idempotency_key`. Reuses the existing `superRefine` slug-derivation guard. The handler call is `createPost(store, renderer, ctx.blog.id, args)` after dropping `blog_id` and `idempotency_key` from args.
+- **`create_post`** — Input is `{ blog_id }` plus every `PostInputBaseSchema` field plus optional `idempotency_key`. Reuses `PostInputBaseSchema.shape` + `slugTitleRefinement` (both from the new internal `src/schema/post-input-base.ts`), which is the exact same refinement `PostInputSchema` uses — no duplication. The handler call is `createPost(store, renderer, ctx.blog.id, args)` after dropping `blog_id` and `idempotency_key` from args.
 - **`update_post`** — Wraps `PostPatchSchema` in a `patch` field. An empty `patch: {}` is a valid no-op (matches REST). Calls `updatePost(store, renderer, ctx.blog.id, args.slug, args.patch)`.
 - **`delete_post`** — Calls `deletePost(store, renderer, ctx.blog.id, args.slug)`. Returns `{ deleted: true }`. Idempotent-retry behavior: after a successful delete, a retry with the same `idempotency_key` replays the stored `{ deleted: true }` response (hit-match). A retry WITHOUT the same `idempotency_key` produces `POST_NOT_FOUND` (which is semantically equivalent — the post is already gone). Mirrors REST decision #20.
 - **`get_blog`** — Returns `{ blog: ctx.blog }`. (We could `getBlog(store, args.blog_id)` but `ctx.blog` is already fully loaded from the auth path; re-fetching adds a query for nothing.)
