@@ -2878,7 +2878,7 @@ Implements spec "Tier 2 (fold in if scope allows)". Two example files showing ho
 - Create: `examples/self-hosted/mcp-stdio.ts`
 - Create: `examples/self-hosted/mcp-http.ts`
 
-- [ ] **Step 1: Create `examples/self-hosted/mcp-stdio.ts`**
+- [x] **Step 1: Create `examples/self-hosted/mcp-stdio.ts`**
 
 ```ts
 /**
@@ -2920,7 +2920,7 @@ main().catch((err) => {
 })
 ```
 
-- [ ] **Step 2: Create `examples/self-hosted/mcp-http.ts`**
+- [x] **Step 2: Create `examples/self-hosted/mcp-http.ts`**
 
 ```ts
 /**
@@ -2975,17 +2975,17 @@ main().catch((err) => {
 })
 ```
 
-- [ ] **Step 3: Verify the files compile with project tsconfig**
+- [x] **Step 3: Verify the files compile with project tsconfig**
 
 Run: `pnpm typecheck`
 Expected: no type errors. If `@hono/node-server` is missing from deps, add it: `pnpm add @hono/node-server` (only for examples). If `WebStandardStreamableHTTPServerTransport` has a different constructor signature in the installed SDK version, adjust the example (check `node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.d.ts`).
 
-- [ ] **Step 4: Run the full check**
+- [x] **Step 4: Run the full check**
 
 Run: `pnpm check`
 Expected: still green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add examples/self-hosted/mcp-stdio.ts examples/self-hosted/mcp-http.ts package.json pnpm-lock.yaml
@@ -3012,7 +3012,7 @@ Implements spec "Tier 2 (fold in if scope allows) — #3".
 - Modify: `src/skill.ts`
 - Create: `tests/mcp/skill-parity.test.ts`
 
-- [ ] **Step 1: Write the drift-guard test (failing first)**
+- [x] **Step 1: Write the drift-guard test (failing first)**
 
 Create `tests/mcp/skill-parity.test.ts`:
 
@@ -3071,12 +3071,12 @@ describe('SKILL.md ↔ MCP tools parity', () => {
 })
 ```
 
-- [ ] **Step 2: Run — fails (SKILL.md has no `## MCP tools` section yet)**
+- [x] **Step 2: Run — fails (SKILL.md has no `## MCP tools` section yet)**
 
 Run: `pnpm test -- tests/mcp/skill-parity.test.ts`
 Expected: failure on `expect(skill).toContain('## MCP tools')`.
 
-- [ ] **Step 3: Add the MCP tools section to `src/skill.ts`**
+- [x] **Step 3: Add the MCP tools section to `src/skill.ts`**
 
 Append (before the closing backtick of the template literal) — add a new trailing section:
 
@@ -3107,12 +3107,12 @@ SlopIt also speaks MCP. Connect an MCP-capable agent to the server and call thes
 
 The exact placement: the existing `generateSkillFile` returns a template literal. Append the MCP tools markdown block at the bottom of that template string, just before the trailing backtick. Keep the existing sections untouched.
 
-- [ ] **Step 4: Run the drift-guard test**
+- [x] **Step 4: Run the drift-guard test**
 
 Run: `pnpm test -- tests/mcp/skill-parity.test.ts`
 Expected: 1 passed.
 
-- [ ] **Step 5: `pnpm check` + commit**
+- [x] **Step 5: `pnpm check` + commit**
 
 Run: `pnpm check`
 Expected: all tests pass. The existing `tests/skill.test.ts` (if it exists — check and adjust if it asserts a line count of the SKILL.md output) may need its expectations updated.
@@ -3136,27 +3136,27 @@ EOF
 
 **Files:** none (verification only)
 
-- [ ] **Step 1: Final `pnpm check`**
+- [x] **Step 1: Final `pnpm check`**
 
 Run: `pnpm check`
 Expected: all green. Expected test count: 308 (baseline) + 5 (envelope) + 8 (idem-store) + 8 (auth-helper) + 10 (wrap-tool) + 2 (server) + 4 (signup) + 6 (create_post) + 4 (update_post) + 4 (delete_post) + 5 (read tools) + 2 (bridge) + 1 (descriptions) + 7 (envelope parity) + 1 (skill parity) = ~375.
 
-- [ ] **Step 2: Verify public barrel is unchanged**
+- [x] **Step 2: Verify public barrel is unchanged**
 
 Run: `git diff dev..HEAD -- src/index.ts`
 Expected: ONLY the `createMcpServer` and `McpServerConfig` swap — these were already exported as throwing stubs pre-feature. No new exports. No removed exports.
 
-- [ ] **Step 3: Verify no `slopit.io` strings leaked into core**
+- [x] **Step 3: Verify no `slopit.io` strings leaked into core**
 
 Run: `grep -rn 'slopit.io' src/ | grep -v 'renderPoweredBy'`
 Expected: no output (rule #5 narrow exception preserved).
 
-- [ ] **Step 4: Verify no platform env vars are read by core**
+- [x] **Step 4: Verify no platform env vars are read by core**
 
 Run: `grep -rn 'process.env.STRIPE\|process.env.CLOUDFLARE\|process.env.SLOPIT_DOMAIN' src/`
 Expected: no output.
 
-- [ ] **Step 5: Verify self-hosted example still compiles**
+- [x] **Step 5: Verify self-hosted example still compiles**
 
 Run: `pnpm tsc --noEmit -p examples/self-hosted/tsconfig.json 2>/dev/null || pnpm typecheck`
 Expected: no errors.
