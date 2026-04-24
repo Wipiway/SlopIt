@@ -33,7 +33,7 @@ export interface ToolCtx {
   apiKeyHash?: string
 }
 
-export type ToolBusiness<A> = (args: A, ctx: ToolCtx) => Promise<unknown>
+export type ToolBusiness<A> = (args: A, ctx: ToolCtx) => unknown
 
 type WrappedToolCallback<A> = (args: A, extra: Extra) => Promise<CallToolResult>
 
