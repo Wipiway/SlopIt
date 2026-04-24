@@ -135,7 +135,7 @@ export function wrapTool<A extends Record<string, unknown> = Record<string, unkn
       // Step 3: Idempotency lookup
       const idemKey = typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined
       let idemScope: IdempotencyScope | undefined
-      if (opts.idempotent === true && idemKey !== undefined && ctx.apiKeyHash !== undefined) {
+      if (opts.idempotent === true && idemKey !== undefined && !!ctx.apiKeyHash) {
         idemScope = {
           key: idemKey,
           apiKeyHash: ctx.apiKeyHash,

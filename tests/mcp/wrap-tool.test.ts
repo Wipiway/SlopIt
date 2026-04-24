@@ -180,4 +180,25 @@ describe('wrapTool', () => {
     await cb({ blog_id: blogId }, authExtra())
     expect(calls).toBe(2)
   })
+
+  it("authMode:'none' + idempotency_key: both calls execute (no dedup, no INTERNAL_ERROR)", async () => {
+    const noneConfig: McpServerConfig = { ...config, authMode: 'none' }
+    let calls = 0
+    const cb = wrapTool<{ blog_id: string; idempotency_key?: string }>(
+      noneConfig,
+      'x',
+      { auth: 'required', idempotent: true, crossBlogGuard: true },
+      async () => {
+        calls += 1
+        return { call: calls }
+      },
+    )
+    const first = await cb({ blog_id: blogId, idempotency_key: 'idem-1' }, makeExtra())
+    const second = await cb({ blog_id: blogId, idempotency_key: 'idem-1' }, makeExtra())
+    // Both calls must succeed (no INTERNAL_ERROR, no IDEMPOTENCY_KEY_CONFLICT)
+    expect(first.isError).toBeUndefined()
+    expect(second.isError).toBeUndefined()
+    // Business handler must have run twice (no dedup under authMode:'none')
+    expect(calls).toBe(2)
+  })
 })
