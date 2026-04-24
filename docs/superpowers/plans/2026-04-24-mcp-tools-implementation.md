@@ -3161,11 +3161,11 @@ Expected: no output.
 Run: `pnpm tsc --noEmit -p examples/self-hosted/tsconfig.json 2>/dev/null || pnpm typecheck`
 Expected: no errors.
 
-- [ ] **Step 6: Push the branch (if not already)**
+- [x] **Step 6: Push the branch (if not already)**
 
 Run: `git push -u origin feat/mcp-tools`
 
-- [ ] **Step 7: Update the PR body with the final checklist**
+- [x] **Step 7: Update the PR body with the final checklist**
 
 In the PR description (see PR template in `docs/superpowers/handoffs/feat-mcp-tools.md` "What to hand back when done" section), make sure the following are checked:
 
