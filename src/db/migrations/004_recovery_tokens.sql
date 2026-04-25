@@ -5,10 +5,19 @@
 -- the plaintext token. Plaintext is returned to platform once and only
 -- once so the email body can include it; never persisted.
 --
--- Step 2 (GET /recover/confirm): platform passes the plaintext back to
--- consumeRecoveryToken(); core hashes, looks up, validates expiry +
--- consumed_at, marks consumed, then atomically rotates API keys for all
--- blogs currently associated with the email.
+-- Step 2: platform passes the plaintext back to consumeRecoveryToken();
+-- core hashes, looks up, validates expiry + consumed_at, marks consumed,
+-- then atomically rotates API keys for all blogs currently associated
+-- with the email.
+--
+-- Step 2 transport: the consume call MUST be triggered by an explicit
+-- user action (POST from a confirmation page, button click), NOT a bare
+-- GET on the link in the email. Email security scanners, inbox link
+-- previews, and browser prefetch routinely fetch link targets and would
+-- silently consume the token before the user intentionally confirms.
+-- Recommended platform shape: GET /recover/confirm renders a page with
+-- the token in a hidden form, and POST /recover/confirm is what calls
+-- consumeRecoveryToken().
 --
 -- Two-step is mandatory: without a token, anyone who knows or guesses a
 -- registered email could DoS that account by triggering an immediate

@@ -91,6 +91,13 @@ export interface RecoveryConsumeResult {
  * token). Callers must not distinguish failure modes in their HTTP/UI
  * response.
  *
+ * Transport requirement: callers MUST invoke this from an explicit user
+ * action (a POST handler behind a confirmation button), not from a bare
+ * GET on the link sent in the recovery email. Email security scanners,
+ * inbox link previews, and browser prefetch will hit GET URLs without
+ * the user's intent and would silently consume the token + rotate the
+ * keys. Render a confirmation page on GET; consume on POST.
+ *
  * Re-query semantics: blogs added under the same email between request
  * and consume are also rotated; blogs whose email association changed
  * are not. v1 has no email-reassignment path so this distinction is
