@@ -84,12 +84,11 @@ export function uploadMedia(
       const usedRow = store.db
         .prepare('SELECT IFNULL(SUM(bytes), 0) AS used FROM media WHERE blog_id = ?')
         .get(blog.id) as { used: number }
-      if (usedRow.used + input.bytes.length >= limits.maxTotalBytesPerBlog) {
-        throw new SlopItError(
-          'MEDIA_QUOTA_EXCEEDED',
-          'MEDIA_QUOTA_EXCEEDED: Blog media quota exhausted',
-          { used_bytes: usedRow.used, quota_bytes: limits.maxTotalBytesPerBlog },
-        )
+      if (usedRow.used + input.bytes.length > limits.maxTotalBytesPerBlog) {
+        throw new SlopItError('MEDIA_QUOTA_EXCEEDED', 'Blog media quota exhausted', {
+          used_bytes: usedRow.used,
+          quota_bytes: limits.maxTotalBytesPerBlog,
+        })
       }
     }
     store.db

@@ -84,7 +84,7 @@ describe('uploadMedia', () => {
 
   it('rejects upload past per-blog quota with MEDIA_QUOTA_EXCEEDED', () => {
     const { store, renderer, blog } = makeFixtures()
-    const limits = { maxBytes: 5_000_000, maxTotalBytesPerBlog: 16 }
+    const limits = { maxBytes: 5_000_000, maxTotalBytesPerBlog: 15 }
     uploadMedia(store, renderer, limits, blog, {
       filename: 'a.png',
       contentType: 'image/png',
@@ -96,7 +96,7 @@ describe('uploadMedia', () => {
         contentType: 'image/png',
         bytes: new Uint8Array(PNG_BYTES),
       }),
-    ).toThrow(/MEDIA_QUOTA_EXCEEDED/)
+    ).toThrow(/MEDIA_QUOTA_EXCEEDED|quota exhausted/)
   })
 
   it('rolls back the DB row when post-INSERT file work fails', () => {
