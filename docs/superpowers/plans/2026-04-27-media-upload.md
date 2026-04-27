@@ -1605,12 +1605,12 @@ git commit -m "docs(brief): image upload is now in v1 scope"
 Run: `pnpm check`
 Expected: PASS — typecheck + lint + format + all tests.
 
-- [ ] **Step 2: Manually exercise the happy path with curl/REST**
+- [ ] **Step 2: Manually exercise the write contract end-to-end**
 
-`@slopit/core` has no dev server script — boot the self-hosted example, which is the canonical local entrypoint and is also what `examples/self-hosted` is contractually required to keep working. It mounts the REST router at root on port 8080 and writes static output to `./out`.
+**Scope of this check:** `@slopit/core` writes static files; serving them at the public URL is the consumer's job (Caddy in production, `cachedStatic` in `slopit-platform`). `examples/self-hosted/mcp-http.ts` is a **write-path** harness — it boots the API + MCP but does **not** serve the rendered output directory. So we verify the write contract here (upload returns the right URL, the file lands at the expected path, posts can embed the URL) and defer browser-render verification to the platform PR / Caddy deploy.
 
 ```bash
-# Boot the self-hosted example (port 8080, REST at root, MCP at /mcp).
+# Boot the self-hosted write-path harness (port 8080, REST at root, MCP at /mcp).
 SLOPIT_BASE_URL=http://localhost:8080 \
 SLOPIT_OUT=./tmp-out \
 SLOPIT_DB=./tmp-slopit.db \
@@ -1619,31 +1619,46 @@ pnpm dlx tsx examples/self-hosted/mcp-http.ts &
 # Wait until the server is listening, then:
 
 # 1. Sign up
-curl -X POST http://localhost:8080/signup -H 'Content-Type: application/json' -d '{}'
-# Copy api_key + blog_id from the response.
+SIGNUP=$(curl -sX POST http://localhost:8080/signup -H 'Content-Type: application/json' -d '{}')
+echo "$SIGNUP" | jq .
+BLOG_ID=$(echo "$SIGNUP" | jq -r .blog_id)
+API_KEY=$(echo "$SIGNUP" | jq -r .api_key)
 
 # 2. Upload a real PNG
-curl -X POST http://localhost:8080/blogs/<BLOG_ID>/media \
-  -H "Authorization: Bearer <API_KEY>" \
-  -F "file=@/path/to/some.png"
-# Note the returned media.url.
+UPLOAD=$(curl -sX POST http://localhost:8080/blogs/$BLOG_ID/media \
+  -H "Authorization: Bearer $API_KEY" \
+  -F "file=@/path/to/some.png")
+echo "$UPLOAD" | jq .
+URL=$(echo "$UPLOAD" | jq -r .media.url)
+ID=$(echo "$UPLOAD" | jq -r .media.id)
 
-# 3. Open the returned URL in a browser. Image should render.
+# 3. Verify the file is on disk where the URL implies
+test -f "./tmp-out/$BLOG_ID/_media/$ID.png" && echo "OK: file exists" || echo "FAIL: file missing"
 
-# 4. Create a post that references the URL
-curl -X POST http://localhost:8080/blogs/<BLOG_ID>/posts \
-  -H "Authorization: Bearer <API_KEY>" \
+# 4. Verify _links advertises the upload endpoint
+curl -sH "Authorization: Bearer $API_KEY" http://localhost:8080/blogs/$BLOG_ID | jq ._links
+# Expect upload_media and list_media keys present, both = "/blogs/$BLOG_ID/media".
+
+# 5. Create a post embedding the URL; verify rendered HTML contains the <img>
+curl -sX POST http://localhost:8080/blogs/$BLOG_ID/posts \
+  -H "Authorization: Bearer $API_KEY" \
   -H 'Content-Type: text/markdown' \
-  -d $'# Hello\n\n![](http://localhost:8080/_media/<ID>.png)'
+  -d "# Hello\n\n![alt](${URL})\n" | jq .
+# Then look at the rendered HTML on disk:
+grep -c "<img" ./tmp-out/$BLOG_ID/*/index.html
+# Expect: at least 1.
 
-# 5. Open the post URL (printed in the response). Image renders inline.
+# 6. Verify list + delete
+curl -sH "Authorization: Bearer $API_KEY" http://localhost:8080/blogs/$BLOG_ID/media | jq .
+curl -sX DELETE -H "Authorization: Bearer $API_KEY" http://localhost:8080/blogs/$BLOG_ID/media/$ID | jq .
+test ! -f "./tmp-out/$BLOG_ID/_media/$ID.png" && echo "OK: file gone" || echo "FAIL: file still there"
 
 # Cleanup
 rm -rf ./tmp-out ./tmp-slopit.db ./tmp-slopit.db-shm ./tmp-slopit.db-wal
 kill %1 2>/dev/null || true
 ```
 
-If any step fails, debug before moving on. (For a platform-mounted check, `slopit-platform` mounts core under `/api`, so the same calls become `/api/signup`, `/api/blogs/:id/media`, etc. — out of scope here since this PR ships in core.)
+If any step fails, debug before moving on. **Browser-render verification belongs in the follow-up `slopit-platform` PR** — that repo mounts the static handler at `/b/:blogId/*` (and per-tenant subdomains), so once both PRs land in dev, the full read path can be exercised against staging. Surface this in the PR description so the human reviewer knows the read-side check is split across the two repos.
 
 - [ ] **Step 3: Open PR to dev**
 

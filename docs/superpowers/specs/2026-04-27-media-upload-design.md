@@ -359,7 +359,7 @@ Per [CLAUDE.md:111](../../../CLAUDE.md#L111): each REST endpoint and each MCP to
 - **Cross-blog isolation:** key-A cannot read or delete key-B's media (separate test from the existing post-isolation test).
 - **Quota exceeded:** inject a low `mediaMaxTotalBytesPerBlog` (e.g. 100 bytes) and confirm second upload rejects with `MEDIA_QUOTA_EXCEEDED` and accurate `used`/`quota` numbers.
 - **Idempotency on binary upload:** same `Idempotency-Key` + same bytes → identical response. Same key + different bytes → `IDEMPOTENCY_KEY_CONFLICT`. (This is the regression test for the middleware fix.)
-- **Atomicity / file-write failure:** stub `writeFileSync` to throw → confirm DB row is rolled back via the compensation DELETE and no file is left on disk.
+- **Atomicity / post-INSERT failure:** make `mkdirSync` or the file write fail (e.g. plant a regular file at the path that should become the media directory so `mkdirSync` hits `ENOTDIR`) → confirm DB row is rolled back via the compensation DELETE and no orphan file is left on disk. (Avoid `vi.spyOn(fs, 'writeFileSync')` — ESM named bindings are read-only after import, so namespace-level spies don't reach `media.ts`'s already-resolved binding.)
 - **`ON DELETE CASCADE`:** delete a blog → assert `media` rows for that blog are gone.
 - **Delete is ENOENT-tolerant:** pre-delete the file on disk, then call `deleteMedia` → DB row removed, no error.
 
