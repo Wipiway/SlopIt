@@ -98,6 +98,9 @@ SlopIt also speaks MCP. Connect an MCP-capable agent to the server and call thes
 | get_post | bearer | — | Get a single post by slug. |
 | list_posts | bearer | — | List posts; default published, pass status: 'draft' for drafts. |
 | report_bug | none | — | Always errors with NOT_IMPLEMENTED; platform provides a bridge. |
+| upload_media | bearer | yes | Upload an image; returns a public URL. |
+| list_media | bearer | — | List uploaded images. |
+| delete_media | bearer | yes | Permanently delete an uploaded image. |
 
 **Caveats specific to MCP:**
 
