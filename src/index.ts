@@ -22,6 +22,10 @@ export type { RecoveryRequestResult, RecoveryConsumeResult } from './recovery.js
 // Post primitives
 export { createPost, updatePost, deletePost, getPost, listPosts } from './posts.js'
 
+// Media primitives
+export { uploadMedia, listMedia, getMedia, deleteMedia } from './media.js'
+export type { MediaRow, MediaWithUrl, MediaLimits, UploadInput } from './media.js'
+
 // Auth
 export { verifyApiKey } from './auth/api-key.js'
 
