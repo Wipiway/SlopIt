@@ -165,7 +165,7 @@ export function listMedia(
   const rows = store.db
     .prepare(
       `SELECT id, blog_id, filename, content_type, bytes, created_at
-         FROM media WHERE blog_id = ? ORDER BY created_at DESC, id DESC`,
+         FROM media WHERE blog_id = ? ORDER BY created_at DESC, rowid DESC`,
     )
     .all(blogId) as Parameters<typeof rowToMedia>[0][]
   return rows.map((r) => {
