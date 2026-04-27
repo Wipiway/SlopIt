@@ -44,6 +44,9 @@ The response contains \`api_key\`, \`blog_id\`, \`blog_url\`, an \`onboarding_te
 | PATCH /blogs/:id/posts/:slug | Patch fields. Slug is immutable. |
 | DELETE /blogs/:id/posts/:slug | Hard-delete the post. |
 | POST /blogs/:id/media | Upload an image (multipart form, field \`file\`). |
+| GET /blogs/:id/media | List uploaded images for the blog. |
+| GET /blogs/:id/media/:mid | Get a single media record. |
+| DELETE /blogs/:id/media/:mid | Permanently delete an image. |
 
 ## Schema
 

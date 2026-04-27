@@ -8,7 +8,7 @@ import { buildLinks } from './links.js'
 import { createPost, deletePost, getPost, listPosts, updatePost } from '../posts.js'
 import { parseMarkdownBody } from './markdown-body.js'
 import { signupBlog } from '../signup.js'
-import { uploadMedia } from '../media.js'
+import { uploadMedia, listMedia, getMedia, deleteMedia } from '../media.js'
 import type { MediaLimits } from '../media.js'
 
 const StatusQuerySchema = z.enum(['draft', 'published']).optional()
@@ -186,5 +186,23 @@ export function mountRoutes(app: Hono<{ Variables: Vars }>, config: ApiRouterCon
       bytes,
     })
     return c.json({ media, _links: buildLinks(c.var.blog, config) })
+  })
+
+  app.get('/blogs/:id/media', (c) => {
+    const renderer = config.rendererFor(c.var.blog)
+    const media = listMedia(config.store, renderer, c.var.blog.id)
+    return c.json({ media, _links: buildLinks(c.var.blog, config) })
+  })
+
+  app.get('/blogs/:id/media/:mid', (c) => {
+    const renderer = config.rendererFor(c.var.blog)
+    const media = getMedia(config.store, renderer, c.var.blog.id, c.req.param('mid'))
+    return c.json({ media, _links: buildLinks(c.var.blog, config) })
+  })
+
+  app.delete('/blogs/:id/media/:mid', (c) => {
+    const renderer = config.rendererFor(c.var.blog)
+    const result = deleteMedia(config.store, renderer, c.var.blog.id, c.req.param('mid'))
+    return c.json({ ...result, _links: buildLinks(c.var.blog, config) })
   })
 }

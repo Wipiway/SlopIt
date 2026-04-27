@@ -67,4 +67,50 @@ describe('REST media upload', () => {
     const body = (await res.json()) as { error: { code: string } }
     expect(body.error.code).toBe('BAD_REQUEST')
   })
+
+  it('GET /blogs/:id/media lists uploads', async () => {
+    const { app, blogId, apiKey } = await freshApi()
+    const fd = new FormData()
+    fd.append('file', new Blob([PNG_BYTES], { type: 'image/png' }), 'a.png')
+    await app.request(`/blogs/${blogId}/media`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: fd,
+    })
+    const res = await app.request(`/blogs/${blogId}/media`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { media: { id: string }[]; _links: unknown }
+    expect(body.media).toHaveLength(1)
+  })
+
+  it('GET /blogs/:id/media/:mid returns a single record; DELETE removes it', async () => {
+    const { app, blogId, apiKey } = await freshApi()
+    const fd = new FormData()
+    fd.append('file', new Blob([PNG_BYTES], { type: 'image/png' }), 'a.png')
+    const upload = await app.request(`/blogs/${blogId}/media`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: fd,
+    })
+    const { media } = (await upload.json()) as { media: { id: string } }
+
+    const get = await app.request(`/blogs/${blogId}/media/${media.id}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    })
+    expect(get.status).toBe(200)
+
+    const del = await app.request(`/blogs/${blogId}/media/${media.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${apiKey}` },
+    })
+    expect(del.status).toBe(200)
+    expect((await del.json()) as { deleted: true }).toMatchObject({ deleted: true })
+
+    const after = await app.request(`/blogs/${blogId}/media/${media.id}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    })
+    expect(after.status).toBe(404)
+  })
 })
