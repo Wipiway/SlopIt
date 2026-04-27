@@ -100,6 +100,30 @@ describe('uploadMedia', () => {
     ).toThrow(/MEDIA_QUOTA_EXCEEDED|quota exhausted/)
   })
 
+  it('produces a clean URL when baseUrl has no trailing slash', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'slopit-media-noslash-'))
+    const store = createStore({ dbPath: join(dir, 'test.db') })
+    store.db
+      .prepare(
+        "INSERT INTO blogs (id, name, theme, created_at) VALUES (?, ?, 'minimal', datetime('now'))",
+      )
+      .run('blog_test', 'test')
+    const blog: Blog = { id: 'blog_test', name: 'test', theme: 'minimal', createdAt: '' }
+    const renderer = createRenderer({
+      store,
+      outputDir: join(dir, 'out'),
+      baseUrl: 'http://localhost:8080', // intentionally no trailing slash
+    })
+    const result = uploadMedia(
+      store,
+      renderer,
+      { maxBytes: 5_000_000, maxTotalBytesPerBlog: null },
+      blog,
+      { filename: 'a.png', contentType: 'image/png', bytes: new Uint8Array(PNG_BYTES) },
+    )
+    expect(result.url).toBe('http://localhost:8080/_media/' + result.id + '.png')
+  })
+
   it('rolls back the DB row when post-INSERT file work fails', () => {
     const { store, renderer, blog, dir } = makeFixtures()
     // Pre-create the parent dir, then plant a regular file where the

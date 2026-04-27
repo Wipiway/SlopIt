@@ -45,7 +45,8 @@ function isAllowed(ct: string): ct is AllowedType {
 }
 
 function urlFor(renderer: MutationRenderer, row: MediaRow): string {
-  return renderer.baseUrl + '_media/' + row.id + '.' + EXT_BY_TYPE[row.contentType]
+  const base = renderer.baseUrl.replace(/\/$/, '')
+  return base + '/_media/' + row.id + '.' + EXT_BY_TYPE[row.contentType]
 }
 
 export function uploadMedia(
