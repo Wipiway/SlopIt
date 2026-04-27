@@ -187,9 +187,7 @@ export function getMedia(
     )
     .get(blogId, id) as Parameters<typeof rowToMedia>[0] | undefined
   if (!row) {
-    throw new SlopItError('MEDIA_NOT_FOUND', `MEDIA_NOT_FOUND: media "${id}" not found`, {
-      id,
-    })
+    throw new SlopItError('MEDIA_NOT_FOUND', `Media "${id}" not found`, { id })
   }
   const m = rowToMedia(row)
   return { ...m, url: urlFor(renderer, m) }

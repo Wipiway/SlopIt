@@ -166,7 +166,7 @@ describe('listMedia / getMedia / deleteMedia', () => {
       },
     )
     expect(getMedia(store, renderer, blog.id, a.id).filename).toBe('a.png')
-    expect(() => getMedia(store, renderer, blog.id, 'nope')).toThrow(/MEDIA_NOT_FOUND/)
+    expect(() => getMedia(store, renderer, blog.id, 'nope')).toThrow(/MEDIA_NOT_FOUND|not found/)
   })
 
   it('deleteMedia removes the row and the file; ENOENT-tolerant', () => {
@@ -193,7 +193,7 @@ describe('listMedia / getMedia / deleteMedia', () => {
 
   it('deleteMedia throws MEDIA_NOT_FOUND for unknown id', () => {
     const { store, renderer, blog } = makeFixtures()
-    expect(() => deleteMedia(store, renderer, blog.id, 'nope')).toThrow(/MEDIA_NOT_FOUND/)
+    expect(() => deleteMedia(store, renderer, blog.id, 'nope')).toThrow(/MEDIA_NOT_FOUND|not found/)
   })
 
   it('cross-blog isolation: getMedia/deleteMedia for blog A cannot see blog B media', () => {
@@ -214,7 +214,7 @@ describe('listMedia / getMedia / deleteMedia', () => {
         bytes: new Uint8Array(PNG_BYTES),
       },
     )
-    expect(() => getMedia(store, renderer, 'blog_b', a.id)).toThrow(/MEDIA_NOT_FOUND/)
-    expect(() => deleteMedia(store, renderer, 'blog_b', a.id)).toThrow(/MEDIA_NOT_FOUND/)
+    expect(() => getMedia(store, renderer, 'blog_b', a.id)).toThrow(/MEDIA_NOT_FOUND|not found/)
+    expect(() => deleteMedia(store, renderer, 'blog_b', a.id)).toThrow(/MEDIA_NOT_FOUND|not found/)
   })
 })
