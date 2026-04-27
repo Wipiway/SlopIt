@@ -8,6 +8,8 @@ import { buildLinks } from './links.js'
 import { createPost, deletePost, getPost, listPosts, updatePost } from '../posts.js'
 import { parseMarkdownBody } from './markdown-body.js'
 import { signupBlog } from '../signup.js'
+import { uploadMedia, listMedia, getMedia, deleteMedia } from '../media.js'
+import type { MediaLimits } from '../media.js'
 
 const StatusQuerySchema = z.enum(['draft', 'published']).optional()
 
@@ -27,6 +29,39 @@ async function readJsonBodyOptional(c: Context): Promise<unknown> {
   const text = await c.req.text()
   if (text === '') return {}
   return JSON.parse(text)
+}
+
+// Multipart MIME inference. Many clients (default cURL, browsers when
+// the user drag-drops, etc.) tag a file part as application/octet-stream
+// or with no type at all. The spec disallows magic-byte sniffing, but
+// inferring from the filename extension when the client didn't declare
+// a useful MIME closes the gap unambiguously. Keys mirror the four
+// extensions we accept in src/media.ts; widening this map implies
+// widening the allowlist there, which is a separate change.
+const EXT_TO_TYPE: Record<string, string> = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+}
+
+function inferContentTypeFromFilename(name: string): string | undefined {
+  const dot = name.lastIndexOf('.')
+  if (dot < 0 || dot === name.length - 1) return undefined
+  return EXT_TO_TYPE[name.slice(dot + 1).toLowerCase()]
+}
+
+function resolveMediaLimits(config: ApiRouterConfig, blog: Blog): MediaLimits {
+  const maxBytes =
+    typeof config.mediaMaxBytes === 'function'
+      ? config.mediaMaxBytes(blog)
+      : (config.mediaMaxBytes ?? 5_000_000)
+  const maxTotalBytesPerBlog =
+    typeof config.mediaMaxTotalBytesPerBlog === 'function'
+      ? config.mediaMaxTotalBytesPerBlog(blog)
+      : (config.mediaMaxTotalBytesPerBlog ?? null)
+  return { maxBytes, maxTotalBytesPerBlog }
 }
 
 export function mountRoutes(app: Hono<{ Variables: Vars }>, config: ApiRouterConfig): void {
@@ -148,6 +183,61 @@ export function mountRoutes(app: Hono<{ Variables: Vars }>, config: ApiRouterCon
   app.delete('/blogs/:id/posts/:slug', (c) => {
     const renderer = config.rendererFor(c.var.blog)
     const result = deletePost(config.store, renderer, c.var.blog.id, c.req.param('slug'))
+    return c.json({ ...result, _links: buildLinks(c.var.blog, config) })
+  })
+
+  // Media: upload (multipart)
+  app.post('/blogs/:id/media', async (c) => {
+    const renderer = config.rendererFor(c.var.blog)
+    const limits = resolveMediaLimits(config, c.var.blog)
+    const ct = c.req.header('Content-Type') ?? ''
+    if (!ct.startsWith('multipart/form-data')) {
+      throw new SlopItError('BAD_REQUEST', 'multipart/form-data required', { content_type: ct })
+    }
+    const form = await c.req.parseBody({ all: true })
+    const fileField = form['file']
+    if (fileField === undefined) {
+      throw new SlopItError('BAD_REQUEST', "multipart 'file' field required", {})
+    }
+    if (Array.isArray(fileField)) {
+      throw new SlopItError('BAD_REQUEST', 'only one file per request', {})
+    }
+    if (typeof fileField === 'string') {
+      throw new SlopItError('BAD_REQUEST', "'file' must be a binary upload", {})
+    }
+    const file = fileField
+    if (file.size === 0) {
+      throw new SlopItError('BAD_REQUEST', 'file is empty', {})
+    }
+    const declared = file.type
+    const effectiveContentType =
+      declared !== '' && declared !== 'application/octet-stream'
+        ? declared
+        : (inferContentTypeFromFilename(file.name) ?? declared)
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    const media = uploadMedia(config.store, renderer, limits, c.var.blog, {
+      filename: file.name,
+      contentType: effectiveContentType,
+      bytes,
+    })
+    return c.json({ media, _links: buildLinks(c.var.blog, config) })
+  })
+
+  app.get('/blogs/:id/media', (c) => {
+    const renderer = config.rendererFor(c.var.blog)
+    const media = listMedia(config.store, renderer, c.var.blog.id)
+    return c.json({ media, _links: buildLinks(c.var.blog, config) })
+  })
+
+  app.get('/blogs/:id/media/:mid', (c) => {
+    const renderer = config.rendererFor(c.var.blog)
+    const media = getMedia(config.store, renderer, c.var.blog.id, c.req.param('mid'))
+    return c.json({ media, _links: buildLinks(c.var.blog, config) })
+  })
+
+  app.delete('/blogs/:id/media/:mid', (c) => {
+    const renderer = config.rendererFor(c.var.blog)
+    const result = deleteMedia(config.store, renderer, c.var.blog.id, c.req.param('mid'))
     return c.json({ ...result, _links: buildLinks(c.var.blog, config) })
   })
 }
