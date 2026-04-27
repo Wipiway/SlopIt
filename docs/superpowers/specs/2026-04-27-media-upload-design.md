@@ -320,7 +320,7 @@ An agent that has *any* prior response from the API now knows the upload endpoin
 
 Voice matches existing tools in [src/mcp/tools.ts](../../../src/mcp/tools.ts) — short, imperative, names the inputs, says what comes back. Examples to use verbatim:
 
-- `upload_media`: `"Upload an image (JPEG, PNG, GIF, or WebP, max 5 MB). Pass the bytes as base64 in `data_base64` plus `filename` and `content_type`. Returns a public URL — paste it into markdown as ![alt](url) or pass to create_post as coverImage."`
+- `upload_media`: `"Upload an image (JPEG/PNG/GIF/WebP, max 5MB) as base64 in `data_base64`. Returns a public URL — use it as ![alt](url) in post markdown or pass as coverImage."` (kept under the 240-char `tool-descriptions.test.ts` guard)
 - `list_media`: `"List uploaded images for the blog. Returns each image's id, public URL, content type, and byte size."`
 - `delete_media`: `"Permanently delete an uploaded image by id. The URL stops working immediately. Posts that referenced it will show a broken image until edited."`
 

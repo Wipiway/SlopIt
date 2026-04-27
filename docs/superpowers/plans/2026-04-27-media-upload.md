@@ -84,10 +84,11 @@ git commit -m "feat(db): add media table migration"
 
 - [ ] **Step 1: Extend `SlopItErrorCode` union**
 
-Edit `src/errors.ts`:
+Edit `src/errors.ts`. Note: `BAD_REQUEST` is added too — today it's only produced by `mapErrorToEnvelope(SyntaxError)` and is NOT a first-class union member. The new media boundary-parse cases (no `file` field, multiple `file` fields, empty base64, etc.) need to throw `new SlopItError('BAD_REQUEST', …)`, so it must be in the union.
 
 ```ts
 export type SlopItErrorCode =
+  | 'BAD_REQUEST'
   | 'BLOG_NAME_CONFLICT'
   | 'BLOG_NAME_RESERVED'
   | 'BLOG_NOT_FOUND'
@@ -105,7 +106,7 @@ export type SlopItErrorCode =
 - [ ] **Step 2: Run type-check to confirm `CODE_TO_STATUS` is now incomplete**
 
 Run: `pnpm typecheck`
-Expected: FAIL with errors about `CODE_TO_STATUS` missing keys for the four new codes (the `Record<SlopItErrorCode, number>` type forces it).
+Expected: FAIL with errors about `CODE_TO_STATUS` missing keys for `BAD_REQUEST` and the four new MEDIA_* codes (the `Record<SlopItErrorCode, number>` type forces it).
 
 - [ ] **Step 3: Add status mappings**
 
@@ -113,6 +114,7 @@ Edit `src/envelope.ts`, replace the `CODE_TO_STATUS` constant:
 
 ```ts
 const CODE_TO_STATUS: Record<SlopItErrorCode, number> = {
+  BAD_REQUEST: 400,
   BLOG_NAME_CONFLICT: 409,
   BLOG_NAME_RESERVED: 400,
   BLOG_NOT_FOUND: 404,
@@ -127,6 +129,8 @@ const CODE_TO_STATUS: Record<SlopItErrorCode, number> = {
   MEDIA_QUOTA_EXCEEDED: 413,
 }
 ```
+
+The existing `mapErrorToEnvelope` `SyntaxError` branch (which hand-rolls a `BAD_REQUEST` envelope) keeps working unchanged — it still emits the same envelope without going through `CODE_TO_STATUS`. The new entry only matters when `BAD_REQUEST` is thrown explicitly via `new SlopItError('BAD_REQUEST', ...)`.
 
 - [ ] **Step 4: Run type-check, expect PASS**
 
@@ -523,19 +527,19 @@ Append:
 
 Run: `pnpm test tests/media.test.ts -- --run`
 
-- [ ] **Step 11: Add atomicity test (file-write fails → no row)**
+- [ ] **Step 11: Add atomicity test (post-INSERT failure → DB row rolled back)**
 
-Append:
+Append. **Why a stub renderer instead of `vi.spyOn(fs, 'writeFileSync')`:** `src/media.ts` imports `writeFileSync` as a named binding. In ESM, named bindings are live but read-only — `vi.spyOn(fs, 'writeFileSync')` mutates the namespace object after import, which doesn't reach the already-resolved binding inside `media.ts`, so the spy may not fire. Instead, we wrap the real renderer with a thin proxy whose `mediaDir()` returns a path that makes `mkdirSync` fail (a regular file pretending to be a directory parent → `ENOTDIR`). The compensation block triggers the same way regardless of which post-INSERT step throws.
 
 ```ts
-import { vi } from 'vitest'
-import * as fs from 'node:fs'
+import { writeFileSync as fsWriteFileSync } from 'node:fs'
 
-  it('rolls back the DB row when the file write fails', () => {
-    const { store, renderer, blog } = makeFixtures()
-    const spy = vi.spyOn(fs, 'writeFileSync').mockImplementationOnce(() => {
-      throw new Error('disk full')
-    })
+  it('rolls back the DB row when post-INSERT file work fails', () => {
+    const { store, renderer, blog, dir } = makeFixtures()
+    // Plant a regular file where the media dir would live, so mkdirSync
+    // hits ENOTDIR on a path component.
+    fsWriteFileSync(join(dir, 'out', 'blog_test'), 'i-am-a-file-not-a-dir')
+
     expect(() =>
       uploadMedia(
         store,
@@ -544,14 +548,16 @@ import * as fs from 'node:fs'
         blog,
         { filename: 'a.png', contentType: 'image/png', bytes: new Uint8Array(PNG_BYTES) },
       ),
-    ).toThrow(/disk full/)
-    spy.mockRestore()
+    ).toThrow(/ENOTDIR|Not a directory|EEXIST/i)
+
     const count = store.db
       .prepare('SELECT COUNT(*) as c FROM media WHERE blog_id = ?')
       .get('blog_test') as { c: number }
     expect(count.c).toBe(0)
   })
 ```
+
+If the harness `mkdtempSync` parent makes the planted-file approach awkward (e.g. `out/` doesn't exist yet when the test runs), pre-create the parent: `mkdirSync(join(dir, 'out'), { recursive: true })` before planting the blocker file.
 
 - [ ] **Step 12: Run, expect PASS**
 
@@ -1397,7 +1403,7 @@ Inside `registerTools`, after the existing tools, add:
     'upload_media',
     {
       description:
-        'Upload an image (JPEG, PNG, GIF, or WebP, max 5 MB). Pass the bytes as base64 in `data_base64` plus `filename` and `content_type`. Returns a public URL — paste it into markdown as ![alt](url) or pass to create_post as coverImage.',
+        'Upload an image (JPEG/PNG/GIF/WebP, max 5MB) as base64 in `data_base64`. Returns a public URL — use it as ![alt](url) in post markdown or pass as coverImage.',
       inputSchema: UploadMediaInputSchema,
     },
     wrapTool<z.infer<typeof UploadMediaInputSchema>>(
@@ -1601,31 +1607,43 @@ Expected: PASS — typecheck + lint + format + all tests.
 
 - [ ] **Step 2: Manually exercise the happy path with curl/REST**
 
-Boot the server locally (`pnpm dev` or whatever `package.json` exposes). Then:
+`@slopit/core` has no dev server script — boot the self-hosted example, which is the canonical local entrypoint and is also what `examples/self-hosted` is contractually required to keep working. It mounts the REST router at root on port 8080 and writes static output to `./out`.
 
 ```bash
+# Boot the self-hosted example (port 8080, REST at root, MCP at /mcp).
+SLOPIT_BASE_URL=http://localhost:8080 \
+SLOPIT_OUT=./tmp-out \
+SLOPIT_DB=./tmp-slopit.db \
+pnpm dlx tsx examples/self-hosted/mcp-http.ts &
+
+# Wait until the server is listening, then:
+
 # 1. Sign up
-curl -X POST http://localhost:3000/signup -H 'Content-Type: application/json' -d '{}'
+curl -X POST http://localhost:8080/signup -H 'Content-Type: application/json' -d '{}'
 # Copy api_key + blog_id from the response.
 
 # 2. Upload a real PNG
-curl -X POST http://localhost:3000/blogs/<BLOG_ID>/media \
+curl -X POST http://localhost:8080/blogs/<BLOG_ID>/media \
   -H "Authorization: Bearer <API_KEY>" \
   -F "file=@/path/to/some.png"
-# Note the returned url.
+# Note the returned media.url.
 
-# 3. Fetch the URL in a browser. Image should render.
+# 3. Open the returned URL in a browser. Image should render.
 
 # 4. Create a post that references the URL
-curl -X POST http://localhost:3000/blogs/<BLOG_ID>/posts \
+curl -X POST http://localhost:8080/blogs/<BLOG_ID>/posts \
   -H "Authorization: Bearer <API_KEY>" \
   -H 'Content-Type: text/markdown' \
-  -d $'# Hello\n\n![](https://test.example/_media/<ID>.png)'
+  -d $'# Hello\n\n![](http://localhost:8080/_media/<ID>.png)'
 
-# 5. Visit the post URL. Image renders inline.
+# 5. Open the post URL (printed in the response). Image renders inline.
+
+# Cleanup
+rm -rf ./tmp-out ./tmp-slopit.db ./tmp-slopit.db-shm ./tmp-slopit.db-wal
+kill %1 2>/dev/null || true
 ```
 
-If any step fails, debug before moving on.
+If any step fails, debug before moving on. (For a platform-mounted check, `slopit-platform` mounts core under `/api`, so the same calls become `/api/signup`, `/api/blogs/:id/media`, etc. — out of scope here since this PR ships in core.)
 
 - [ ] **Step 3: Open PR to dev**
 
