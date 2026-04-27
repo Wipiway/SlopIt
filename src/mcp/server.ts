@@ -16,6 +16,16 @@ export interface McpServerConfig {
   bugReportUrl?: string
   dashboardUrl?: string
   /**
+   * Per-file upload cap in bytes. Default 5_000_000 (5 MB) when undefined.
+   * Platform passes plan-tier values; self-hosted leaves unset.
+   */
+  mediaMaxBytes?: number
+  /**
+   * Per-blog total media cap in bytes. `null` = unlimited (default).
+   * Platform passes plan-tier values; self-hosted leaves unset.
+   */
+  mediaMaxTotalBytesPerBlog?: number | null
+  /**
    * Mirrors ApiRouterConfig.onSignup so REST and MCP signup go through
    * the same hook. Both paths invoke signupBlog() under the hood; this
    * field is what the orchestration reads.

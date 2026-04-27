@@ -25,6 +25,16 @@ export interface ApiRouterConfig {
   bugReportUrl?: string
   dashboardUrl?: string
   /**
+   * Per-file upload cap in bytes. Default 5_000_000 (5 MB) when undefined.
+   * Platform passes plan-tier values; self-hosted leaves unset.
+   */
+  mediaMaxBytes?: number
+  /**
+   * Per-blog total media cap in bytes. `null` = unlimited (default).
+   * Platform passes plan-tier values; self-hosted leaves unset.
+   */
+  mediaMaxTotalBytesPerBlog?: number | null
+  /**
    * Optional hook fired after a blog + API key are created at signup,
    * if (and only if) the caller provided an email. Platform wires this
    * to its email sender (Resend, etc); self-hosters can omit it. Hook
