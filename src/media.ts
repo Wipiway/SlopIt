@@ -130,3 +130,85 @@ export function uploadMedia(
   }
   return { ...row, url: urlFor(renderer, row) }
 }
+
+function rowToMedia(r: {
+  id: string
+  blog_id: string
+  filename: string
+  content_type: string
+  bytes: number
+  created_at: string
+}): MediaRow {
+  if (!isAllowed(r.content_type)) {
+    // Type narrowing for TS; row content_type is constrained by the DB writer.
+    throw new SlopItError(
+      'MEDIA_TYPE_UNSUPPORTED',
+      `Stored row has invalid content_type "${r.content_type}"`,
+      { content_type: r.content_type },
+    )
+  }
+  return {
+    id: r.id,
+    blogId: r.blog_id,
+    filename: r.filename,
+    contentType: r.content_type,
+    bytes: r.bytes,
+    createdAt: r.created_at,
+  }
+}
+
+export function listMedia(
+  store: Store,
+  renderer: MutationRenderer,
+  blogId: string,
+): MediaWithUrl[] {
+  const rows = store.db
+    .prepare(
+      `SELECT id, blog_id, filename, content_type, bytes, created_at
+         FROM media WHERE blog_id = ? ORDER BY created_at DESC, id DESC`,
+    )
+    .all(blogId) as Parameters<typeof rowToMedia>[0][]
+  return rows.map((r) => {
+    const m = rowToMedia(r)
+    return { ...m, url: urlFor(renderer, m) }
+  })
+}
+
+export function getMedia(
+  store: Store,
+  renderer: MutationRenderer,
+  blogId: string,
+  id: string,
+): MediaWithUrl {
+  const row = store.db
+    .prepare(
+      `SELECT id, blog_id, filename, content_type, bytes, created_at
+         FROM media WHERE blog_id = ? AND id = ?`,
+    )
+    .get(blogId, id) as Parameters<typeof rowToMedia>[0] | undefined
+  if (!row) {
+    throw new SlopItError('MEDIA_NOT_FOUND', `MEDIA_NOT_FOUND: media "${id}" not found`, {
+      id,
+    })
+  }
+  const m = rowToMedia(row)
+  return { ...m, url: urlFor(renderer, m) }
+}
+
+export function deleteMedia(
+  store: Store,
+  renderer: MutationRenderer,
+  blogId: string,
+  id: string,
+): { deleted: true } {
+  const m = getMedia(store, renderer, blogId, id) // throws MEDIA_NOT_FOUND
+  store.db.prepare('DELETE FROM media WHERE id = ?').run(id)
+  const ext = EXT_BY_TYPE[m.contentType]
+  const path = join(renderer.mediaDir(blogId), id + '.' + ext)
+  try {
+    unlinkSync(path)
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+  }
+  return { deleted: true }
+}

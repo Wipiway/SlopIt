@@ -5,12 +5,13 @@ import {
   existsSync,
   writeFileSync as fsWriteFileSync,
   mkdirSync,
+  unlinkSync,
 } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createStore } from '../src/db/store.js'
 import { createRenderer } from '../src/rendering/generator.js'
-import { uploadMedia } from '../src/media.js'
+import { uploadMedia, listMedia, getMedia, deleteMedia } from '../src/media.js'
 import type { Blog } from '../src/schema/index.js'
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
@@ -118,5 +119,102 @@ describe('uploadMedia', () => {
       .prepare('SELECT COUNT(*) as c FROM media WHERE blog_id = ?')
       .get('blog_test') as { c: number }
     expect(count.c).toBe(0)
+  })
+})
+
+describe('listMedia / getMedia / deleteMedia', () => {
+  it('lists media for the blog newest-first', () => {
+    const { store, renderer, blog } = makeFixtures()
+    const a = uploadMedia(
+      store,
+      renderer,
+      { maxBytes: 5_000_000, maxTotalBytesPerBlog: null },
+      blog,
+      {
+        filename: 'a.png',
+        contentType: 'image/png',
+        bytes: new Uint8Array(PNG_BYTES),
+      },
+    )
+    const b = uploadMedia(
+      store,
+      renderer,
+      { maxBytes: 5_000_000, maxTotalBytesPerBlog: null },
+      blog,
+      {
+        filename: 'b.png',
+        contentType: 'image/png',
+        bytes: new Uint8Array(PNG_BYTES),
+      },
+    )
+    const list = listMedia(store, renderer, blog.id)
+    expect(list.map((m) => m.id)).toEqual([b.id, a.id])
+    expect(list[0].url).toMatch(/^https:\/\/test\.example\/_media\//)
+  })
+
+  it('getMedia returns single row by id; throws MEDIA_NOT_FOUND for unknown id', () => {
+    const { store, renderer, blog } = makeFixtures()
+    const a = uploadMedia(
+      store,
+      renderer,
+      { maxBytes: 5_000_000, maxTotalBytesPerBlog: null },
+      blog,
+      {
+        filename: 'a.png',
+        contentType: 'image/png',
+        bytes: new Uint8Array(PNG_BYTES),
+      },
+    )
+    expect(getMedia(store, renderer, blog.id, a.id).filename).toBe('a.png')
+    expect(() => getMedia(store, renderer, blog.id, 'nope')).toThrow(/MEDIA_NOT_FOUND/)
+  })
+
+  it('deleteMedia removes the row and the file; ENOENT-tolerant', () => {
+    const { store, renderer, blog } = makeFixtures()
+    const a = uploadMedia(
+      store,
+      renderer,
+      { maxBytes: 5_000_000, maxTotalBytesPerBlog: null },
+      blog,
+      {
+        filename: 'a.png',
+        contentType: 'image/png',
+        bytes: new Uint8Array(PNG_BYTES),
+      },
+    )
+    const filePath = join(renderer.mediaDir(blog.id), a.id + '.png')
+    // Pre-delete the file: deleteMedia must still succeed (ENOENT-tolerant)
+    unlinkSync(filePath)
+    expect(deleteMedia(store, renderer, blog.id, a.id)).toEqual({ deleted: true })
+    expect(store.db.prepare('SELECT COUNT(*) c FROM media WHERE id = ?').get(a.id)).toEqual({
+      c: 0,
+    })
+  })
+
+  it('deleteMedia throws MEDIA_NOT_FOUND for unknown id', () => {
+    const { store, renderer, blog } = makeFixtures()
+    expect(() => deleteMedia(store, renderer, blog.id, 'nope')).toThrow(/MEDIA_NOT_FOUND/)
+  })
+
+  it('cross-blog isolation: getMedia/deleteMedia for blog A cannot see blog B media', () => {
+    const { store, renderer, blog } = makeFixtures()
+    store.db
+      .prepare(
+        "INSERT INTO blogs (id, name, theme, created_at) VALUES (?, ?, 'minimal', datetime('now'))",
+      )
+      .run('blog_b', 'b')
+    const a = uploadMedia(
+      store,
+      renderer,
+      { maxBytes: 5_000_000, maxTotalBytesPerBlog: null },
+      blog,
+      {
+        filename: 'a.png',
+        contentType: 'image/png',
+        bytes: new Uint8Array(PNG_BYTES),
+      },
+    )
+    expect(() => getMedia(store, renderer, 'blog_b', a.id)).toThrow(/MEDIA_NOT_FOUND/)
+    expect(() => deleteMedia(store, renderer, 'blog_b', a.id)).toThrow(/MEDIA_NOT_FOUND/)
   })
 })
