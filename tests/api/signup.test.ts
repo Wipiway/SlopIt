@@ -59,7 +59,7 @@ describe('POST /signup', () => {
     expect(body.onboarding_text).toContain('Published my first post to SlopIt: <url>')
     expect(body.email_sent).toBe(false) // no email was provided
     expect(body._links.view).toBe('https://blog.example')
-    expect(body._links.bridge).toBe('/bridge/report_bug')
+    expect(body._links.bridge).toBe('https://api.example/bridge/report_bug')
   })
 
   it('email_sent: true when an email is provided and onSignup resolves', async () => {
