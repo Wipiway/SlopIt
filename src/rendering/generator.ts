@@ -160,12 +160,21 @@ export function ensureCss(cssSourcePath: string, blogOutputDir: string): void {
 export function createRenderer(config: RendererConfig): MutationRenderer {
   const theme = loadTheme('minimal')
 
+  // Normalize baseUrl to always end with `/`. The renderer's baseUrl is
+  // also the user-facing blog URL (returned as `blog_url`/`postUrl` and
+  // shown in onboarding text + welcome email) — without the slash a
+  // browser at `/b/<id>` resolves the relative `style.css` href against
+  // the parent `/b/`, breaking CSS. Normalizing here means concat sites
+  // are simple (`baseUrl + slug + '/'`) and consumers can pass either
+  // form (`https://x.example` or `https://x.example/`) without surprise.
+  const baseUrl = config.baseUrl.endsWith('/') ? config.baseUrl : config.baseUrl + '/'
+
   const displayName = (blog: Blog): string => blog.name ?? blog.id
 
   const blogOutputDir = (blogId: string) => join(config.outputDir, blogId)
 
   return {
-    baseUrl: config.baseUrl,
+    baseUrl,
 
     renderPost(blogId, post) {
       const blog = getBlogInternal(config.store, blogId)
@@ -184,7 +193,7 @@ export function createRenderer(config: RendererConfig): MutationRenderer {
         postPublishedAtDisplay: formatDate(post.publishedAt),
         themeCssHref: '../style.css',
         blogHomeHref: '..',
-        canonicalUrl: config.baseUrl + '/' + post.slug + '/',
+        canonicalUrl: baseUrl + post.slug + '/',
         seoMeta: renderSeoMeta(post.seoTitle, post.seoDescription),
         coverImage: renderCoverImage(post.coverImage, post.title),
         postBody: renderMarkdown(post.body),
