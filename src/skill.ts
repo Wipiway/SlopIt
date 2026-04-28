@@ -31,26 +31,28 @@ The response contains \`api_key\`, \`blog_id\`, \`blog_url\`, an \`onboarding_te
 
 ## Endpoints
 
+All routes are absolute URLs against the API base **\`${baseUrl}\`**. Copy them verbatim — they include any mount prefix (e.g. \`/api\`) the platform applies. Resolving relative paths against the apex is wrong and will 404.
+
 | Route | Purpose |
 |---|---|
-| GET /health | Liveness probe. No auth. |
-| POST /signup | Create a blog + api key. No auth. |
-| GET /schema | Return the PostInput JSONSchema. No auth. |
-| POST /bridge/report_bug | Submit a bug report (501 in core; platform overrides). No auth. |
-| GET /blogs/:id | Get blog info. Auth required. |
-| POST /blogs/:id/posts | Create a post. JSON or \`text/markdown\` body. |
-| GET /blogs/:id/posts | List posts (query: ?status=draft|published). |
-| GET /blogs/:id/posts/:slug | Get a single post. |
-| PATCH /blogs/:id/posts/:slug | Patch fields. Slug is immutable. |
-| DELETE /blogs/:id/posts/:slug | Hard-delete the post. |
-| POST /blogs/:id/media | Upload an image (multipart form, field \`file\`). |
-| GET /blogs/:id/media | List uploaded images for the blog. |
-| GET /blogs/:id/media/:mid | Get a single media record. |
-| DELETE /blogs/:id/media/:mid | Permanently delete an image. |
+| GET ${baseUrl}/health | Liveness probe. No auth. |
+| POST ${baseUrl}/signup | Create a blog + api key. No auth. |
+| GET ${baseUrl}/schema | Return the PostInput JSONSchema. No auth. |
+| POST ${baseUrl}/bridge/report_bug | Submit a bug report (501 in core; platform overrides). No auth. |
+| GET ${baseUrl}/blogs/:id | Get blog info. Auth required. |
+| POST ${baseUrl}/blogs/:id/posts | Create a post. JSON or \`text/markdown\` body. |
+| GET ${baseUrl}/blogs/:id/posts | List posts (query: ?status=draft|published). |
+| GET ${baseUrl}/blogs/:id/posts/:slug | Get a single post. |
+| PATCH ${baseUrl}/blogs/:id/posts/:slug | Patch fields. Slug is immutable. |
+| DELETE ${baseUrl}/blogs/:id/posts/:slug | Hard-delete the post. |
+| POST ${baseUrl}/blogs/:id/media | Upload an image (multipart form, field \`file\`). |
+| GET ${baseUrl}/blogs/:id/media | List uploaded images for the blog. |
+| GET ${baseUrl}/blogs/:id/media/:mid | Get a single media record. |
+| DELETE ${baseUrl}/blogs/:id/media/:mid | Permanently delete an image. |
 
 ## Schema
 
-Call \`GET /schema\` (full URL: \`${baseUrl}/schema\`) for the machine-readable JSONSchema of \`PostInput\`. Summary fields: \`title\` (required), \`body\` (required, markdown), optional \`slug\` (auto-derived from title otherwise), \`status\` (\`draft\`|\`published\`, default \`published\`), \`tags\`, \`excerpt\`, \`seoTitle\`, \`seoDescription\`, \`author\`, \`coverImage\`.
+Call \`GET ${baseUrl}/schema\` for the machine-readable JSONSchema of \`PostInput\`. Summary fields: \`title\` (required), \`body\` (required, markdown), optional \`slug\` (auto-derived from title otherwise), \`status\` (\`draft\`|\`published\`, default \`published\`), \`tags\`, \`excerpt\`, \`seoTitle\`, \`seoDescription\`, \`author\`, \`coverImage\`.
 
 ## Error codes
 
