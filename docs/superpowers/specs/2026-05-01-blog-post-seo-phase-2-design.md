@@ -75,7 +75,7 @@ For blog-level descriptions in `llms.txt`, no schema change in Phase 2 — `blog
 | 14 | `llms.txt` manifest format: `# <blog name>\n\n> An agent-first blog. Read the markdown source by appending `.md` to any post URL.\n\n## Posts\n\n- [<title>](<canonical>): <description>\n- ...` | Matches the brief's format. The static one-liner under the heading gives consuming agents a useful instruction without requiring a `blog.description` schema field today. |
 | 15 | Posts in `llms.txt` are **sorted by `publishedAt` descending** (newest first). Same as the blog `index.html`. | Consistency with what humans see. |
 | 16 | Drafts are excluded from all four outputs. | Drafts aren't published; they have no canonical URL; they'd break `feed.xml`. |
-| 17 | All file writes are **atomic via the same temp-then-rename pattern** the existing `renderPost` already uses (write to `${path}.tmp`, then `rename`). Avoids partial reads if Caddy serves mid-write. | Existing pattern; no new infra. |
+| 17 | All file writes are **atomic via a new `writeFileAtomic(path, content)` helper** — write to `${path}.tmp`, then `rename`. Phase 2 introduces this helper; the current `generator.ts` does direct `writeFileSync` (lines 195 and 214). The first task in the implementation plan adds the helper and migrates the two existing HTML writes; subsequent tasks have `<slug>.md`, `llms.txt`, `feed.xml`, `sitemap.xml` use it. | Avoids partial reads if Caddy serves mid-write. The reviewer caught the misclaim that this pattern already exists; introducing it now is the cheapest moment because we're touching the renderer's write path anyway. |
 | 18 | The renderer's `MutationRenderer` interface gains four no-op-by-default methods: `renderPostMarkdown`, `renderLlmsTxt`, `renderFeed`, `renderSitemap`. Implementation lives in the same `createRenderer` factory. Self-hosters override nothing; existing behavior is preserved. | Minimal interface growth. The methods exist for testability; they're called internally by the existing `renderPost` and `renderBlog` flows, not by external callers. |
 | 19 | Caddy file-server config in `slopit-platform`'s `Caddyfile` needs one extra rule to serve `.md` files with `Content-Type: text/markdown; charset=utf-8`. `llms.txt` and `feed.xml` get explicit Content-Type rules too. **Caddyfile change is platform-side**, not core, but documented here so the platform PR doesn't get missed. | Cross-cutting concern; flag it once, ship it together. |
 
@@ -87,12 +87,12 @@ For blog-level descriptions in `llms.txt`, no schema change in Phase 2 — `blog
 |---|---|---|
 | `src/rendering/frontmatter.ts` | NEW | `buildFrontmatter(record)` — emits YAML for the fixed 8-key schema. ~25 lines including escape rules for strings, lists, and nullable keys. |
 | `src/rendering/feeds.ts` | NEW | `buildRssFeed(input)`, `buildSitemap(input)`, `buildLlmsTxt(input)`, `escapeXml(s)`. Pure helpers. ~120 lines total. |
-| `src/rendering/generator.ts` | MODIFY | Extend `MutationRenderer` interface with four methods. Wire them into `renderPost` (re-emit per-post `.md` + per-blog manifest/feed/sitemap) and `unpublishPost` / `deletePost` (cleanup). |
+| `src/rendering/generator.ts` | MODIFY | Add `writeFileAtomic(path, content)` private helper; migrate the two existing direct `writeFileSync` calls (lines ~195, ~214). Extend `MutationRenderer` interface with four methods. Wire emission into `renderPost` and cleanup into the published→draft transition inside `updatePost` (`src/posts.ts:376`) plus `deletePost`. |
 | `src/themes/minimal/post.md.template` | NEW | YAML frontmatter + raw body. ~15 lines. |
 | `src/themes/minimal/llms.txt.template` | NEW | Heading + intro line + post list. ~10 lines. |
 | `src/themes/minimal/feed.xml.template` | NEW | RSS 2.0 envelope + per-item template. ~30 lines. |
 | `src/themes/minimal/sitemap.xml.template` | NEW | Standard sitemap envelope + per-url template. ~10 lines. |
-| `src/posts.ts` | MODIFY | `unpublishPost` and `deletePost` now invoke the cleanup methods on the renderer. |
+| `src/posts.ts` | MODIFY | The published→draft transition inside `updatePost` (`src/posts.ts:376`) and `deletePost` (`src/posts.ts:519`) invoke the cleanup methods on the renderer. There is no `unpublishPost` function in core; the unpublish flow is `updatePost(blogId, slug, { status: 'draft' })`. |
 | `tests/feeds.test.ts` | NEW | Unit tests for `buildRssFeed`, `buildSitemap`, `buildLlmsTxt`, `escapeXml`. |
 | `tests/frontmatter.test.ts` | NEW | Unit tests for `buildFrontmatter`. |
 | `tests/rendering.test.ts` | MODIFY | Add integration tests asserting all four outputs are written / removed at the right lifecycle points. |
@@ -223,7 +223,7 @@ tags: ["launch", "ai", "agents"]
 
 **`tests/rendering.test.ts` integration tests (additions):**
 - `createPost(published)` writes `.md`, `llms.txt`, `feed.xml`, `sitemap.xml` at expected paths.
-- `unpublishPost` removes `.md` and regenerates manifest/feed/sitemap minus the post.
+- `updatePost(..., { status: 'draft' })` from a published post removes `.md` and regenerates manifest/feed/sitemap minus the post.
 - `deletePost` removes `.md`, `<slug>/index.html`, and regenerates manifest/feed/sitemap.
 - `deleteBlog` removes entire blog directory (existing behavior, asserted to still hold).
 

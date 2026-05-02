@@ -4,7 +4,7 @@
 
 **Goal:** Every published post is accessible at `<slug>.md` (raw markdown source). Every blog has an `llms.txt` manifest, a `feed.xml` RSS 2.0 feed, and a `sitemap.xml`. All four files written at publish time alongside the existing HTML output. Caddy serves them; Node never reads them.
 
-**Architecture:** Two new pure modules: `src/rendering/frontmatter.ts` (YAML frontmatter builder) and `src/rendering/feeds.ts` (RSS/sitemap/llms.txt builders, plus `escapeXml`). Four new templates in `src/themes/minimal/`. `MutationRenderer` interface gains four methods; `createRenderer` implements them and wires them into the existing `renderPost` flow. `unpublishPost` and `deletePost` invoke the cleanup methods. No new deps.
+**Architecture:** Two new pure modules: `src/rendering/frontmatter.ts` (YAML frontmatter builder) and `src/rendering/feeds.ts` (RSS/sitemap/llms.txt builders, plus `escapeXml`). A new `writeFileAtomic(path, content)` private helper in `generator.ts` (current renderer uses direct `writeFileSync`; reviewer caught this misclaim). Four new templates in `src/themes/minimal/`. `MutationRenderer` interface gains four methods; `createRenderer` implements them and wires emission into the existing `renderPost` flow. The published→draft transition inside `updatePost` (`src/posts.ts:376`) and `deletePost` (`src/posts.ts:519`) invoke the cleanup methods. There is no `unpublishPost` function in core. No new deps.
 
 **Tech Stack:** TypeScript (strict), Node.js, Vitest, existing `escapeHtml` and template rendering. No XML or YAML library.
 
@@ -18,12 +18,12 @@
 |---|---|---|
 | `src/rendering/frontmatter.ts` | Create | `buildFrontmatter(record)` |
 | `src/rendering/feeds.ts` | Create | `escapeXml`, `buildRssFeed`, `buildSitemap`, `buildLlmsTxt` |
-| `src/rendering/generator.ts` | Modify | Extend `MutationRenderer` interface + `createRenderer` factory |
+| `src/rendering/generator.ts` | Modify | Add `writeFileAtomic(path, content)` helper, migrate existing direct writes (lines ~195, ~214) to it. Extend `MutationRenderer` interface + `createRenderer` factory. |
 | `src/themes/minimal/post.md.template` | Create | YAML frontmatter + body |
 | `src/themes/minimal/llms.txt.template` | Create | Manifest format |
 | `src/themes/minimal/feed.xml.template` | Create | RSS 2.0 envelope |
 | `src/themes/minimal/sitemap.xml.template` | Create | Standard sitemap |
-| `src/posts.ts` | Modify | Wire cleanup into `unpublishPost` / `deletePost` |
+| `src/posts.ts` | Modify | Wire cleanup into the `prior.status === 'published'` → `parsed.status === 'draft'` branch of `updatePost` (`src/posts.ts:376`) and into `deletePost` (`src/posts.ts:519`). No `unpublishPost` function exists in core. |
 | `src/skill.ts` | Modify | Document new endpoints |
 | `examples/self-hosted/Caddyfile` | Modify | `Content-Type` rules |
 | `tests/feeds.test.ts` | Create | Unit tests for `feeds.ts` exports |
@@ -31,6 +31,67 @@
 | `tests/rendering.test.ts` | Modify | Lifecycle integration tests |
 | `tests/skill.test.ts` | Modify | Drift tests for new agent docs |
 | `docs/solutions/agent-readable-file-outputs.md` | Create | Capture lifecycle table + atomicity pattern |
+
+---
+
+## Task 0: writeFileAtomic helper + migrate existing writes
+
+The current renderer uses direct `writeFileSync` at `src/rendering/generator.ts:195` (per-post HTML) and `:214` (blog index HTML). Phase 2's spec promises atomic writes for `.md`, `llms.txt`, `feed.xml`, `sitemap.xml`, but the helper they reuse doesn't exist yet — the reviewer caught this misclaim. Introduce it now and migrate the two existing sites; subsequent Tasks 6+ have all four new file types use it for free.
+
+**Files:**
+
+- Modify: `src/rendering/generator.ts`
+- Modify: `tests/rendering.test.ts` (add an atomicity-smoke test if practical; otherwise rely on the existing render integration tests covering the migrated paths).
+
+- [ ] **Step 1: Add the helper**
+
+In `src/rendering/generator.ts`, near the top of the file (after imports, before the existing exports), add:
+
+```ts
+import { renameSync } from 'node:fs'
+
+/**
+ * Write `content` to `path` atomically: write to `${path}.tmp` first,
+ * then rename. POSIX rename is atomic, so a concurrent reader (Caddy)
+ * never sees a partially-written file.
+ *
+ * Used by:
+ *   - per-post `<slug>/index.html` and `<slug>.md`
+ *   - per-blog `index.html`, `llms.txt`, `feed.xml`, `sitemap.xml`
+ *
+ * Caller is responsible for `mkdirSync(dirname(path), { recursive: true })`
+ * if the parent directory doesn't exist (matches the existing pattern in
+ * `ensureCss` and `renderPost`).
+ */
+function writeFileAtomic(path: string, content: string): void {
+  const tmp = `${path}.tmp`
+  writeFileSync(tmp, content, 'utf8')
+  renameSync(tmp, path)
+}
+```
+
+- [ ] **Step 2: Migrate the two existing call sites**
+
+In `src/rendering/generator.ts`:
+
+- Line ~195: replace `writeFileSync(join(postDir, 'index.html'), html, 'utf8')` with `writeFileAtomic(join(postDir, 'index.html'), html)`.
+- Line ~214: replace `writeFileSync(join(blogDir, 'index.html'), html, 'utf8')` with `writeFileAtomic(join(blogDir, 'index.html'), html)`.
+
+Leave `ensureCss`'s `copyFileSync` alone — it already copies a known file from a known source path, no concurrency concern, and changing it adds unrelated risk.
+
+- [ ] **Step 3: Run the existing test suite**
+
+Run: `pnpm check`
+Expected: PASS — every existing render test should still pass; the migrated calls produce the same final file content.
+
+If any test fails because it relied on the leftover `.tmp` file or on observing the file mid-write, that's a brittle test — adjust it to read the final file only.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/rendering/generator.ts
+git commit -m "refactor(rendering): introduce writeFileAtomic and migrate existing HTML writes"
+```
 
 ---
 
@@ -714,22 +775,36 @@ import { extractDescription } from './seo.js' // already in scope from Phase 1
 ```
 
 Add concrete implementations that:
-- Resolve description via `post.seoDescription ?? post.excerpt ?? extractDescription(post.body)` (matches Phase 1 chain).
-- Use the same temp-write-then-rename pattern as `renderPost` (verify in `generator.ts` that this helper exists; if not, lift it out of `renderPost` into a private `writeFileAtomic(path, content)` helper as part of this step).
-- For `renderManifests`: query published posts via the existing internal helper (look for `listPublishedPostsForBlog` or equivalent in `src/posts.ts`); sort newest-first by `publishedAt`; cap RSS at 20.
 
-- [ ] **Step 2: Wire calls into existing flows**
+- Resolve description via Phase 1's `resolveDescription(post)` helper (already imports cleanly from `./seo.js`). Same chain across all four output types — single source of truth for how a post's description is computed.
+- Use the `writeFileAtomic` helper added in Task 0. (The plan-writer verified `writeFileAtomic` doesn't exist in current generator.ts; Task 0 adds it before this task runs.)
+- For `renderManifests`: query via the existing `listPublishedPostsForBlog(store, blogId)` helper at `src/posts.ts:56`; sort newest-first by `publishedAt`; cap RSS at 20.
 
-In `createRenderer.renderPost` (existing function), at the end of the success path, add:
+- [ ] **Step 2: Wire emission and cleanup into existing flows**
+
+In `createRenderer.renderPost` (existing function), at the end of the success path for published posts, add:
 
 ```ts
-this.renderPostMarkdown(blogId, post)  // for published only
+this.renderPostMarkdown(blogId, post) // for published only
 this.renderManifests(blogId)
 ```
 
-In `src/posts.ts`:
-- `unpublishPost`: after the existing `renderer.unpublishPost`-equivalent cleanup of the HTML, call `renderer.deletePostMarkdown(blogId, slug)` and `renderer.renderManifests(blogId)`.
-- `deletePost`: same cleanup.
+In `src/posts.ts`, two existing functions need cleanup wiring. **There is no `unpublishPost` function — the unpublish flow is the published→draft transition inside `updatePost`.**
+
+a) **`updatePost`** (`src/posts.ts:376`): find the existing `prior.status === 'published'` branch around line 394 (which already removes the rendered HTML when transitioning to draft). At that branch, add:
+
+```ts
+// Post was published, now becoming draft — remove .md sibling and
+// regenerate per-blog manifests minus this post.
+renderer.deletePostMarkdown(blogId, prior.slug)
+renderer.renderManifests(blogId)
+```
+
+(Place after the existing HTML-removal call so the manifest regeneration runs once everything is gone.)
+
+b) **`deletePost`** (`src/posts.ts:519`): in the existing `prior.status === 'published'` branch around line 538, add the same two calls.
+
+Read the actual function bodies before editing — this plan describes the intent, not a copy-paste patch, because the surrounding code in `posts.ts` has additional bookkeeping the implementer should integrate cleanly with.
 
 - [ ] **Step 3: Add lifecycle integration tests**
 
