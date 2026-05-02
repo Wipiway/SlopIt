@@ -382,20 +382,26 @@ git commit -m "feat(seo): add resolveDescription and normalizeBaseUrl helpers"
 
 - [ ] **Step 1: Write the failing tests**
 
+Extend the existing imports in `tests/seo.test.ts` (added in Task 2.5) to also pull in `buildJsonLd` and the `Blog` type, then append the new fixtures and `describe` block. Reuse the `baseDate` constant from Task 2.5 — do not re-declare it.
+
+Add to the imports section:
+
+```ts
+// Extend Task 2.5's imports — do NOT add a second import line for the same module.
+// Final import lines should read:
+//   import { resolveDescription, normalizeBaseUrl, buildJsonLd } from '../src/rendering/seo.js'
+//   import type { Post, Blog } from '../src/schema/index.js'
+```
+
 Append to `tests/seo.test.ts`:
 
 ```ts
-import { buildJsonLd } from '../src/rendering/seo.js'
-import type { Post, Blog } from '../src/schema/index.js'
-
 const minimalBlog: Blog = {
   id: 'b1',
   name: 'My Blog',
   theme: 'minimal',
   createdAt: '2026-04-01T00:00:00Z',
 }
-
-const baseDate = '2026-05-01T12:34:56Z'
 
 const minimalPost: Post = {
   id: 'p1',
