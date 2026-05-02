@@ -71,6 +71,8 @@ This spec closes that gap with a single rendering-only PR (no schema migrations,
 | 12 | `renderSeoMeta` is replaced (signature change) by a richer `buildSeoMeta({ post, blog, canonicalUrl })`. The new function lives in a new module `src/rendering/seo.ts`, not in `generator.ts`. `generator.ts` calls into it. | Generator is already 200+ lines and growing. SEO is its own concern; lives in its own file. Files that change together live together — SEO meta + JSON-LD + description fallback are one unit. |
 | 13 | All output is concatenated with `\n` between tags for HTML readability. The rendered output is static; size cost (~200 bytes per post) is negligible against the gzip baseline. | Debuggable view-source matters. Self-hosters and curious readers will look. |
 | 13a | Phase 1 emits `<link rel="alternate" type="text/markdown" href="<slug>.md">` and `<link rel="alternate" type="application/rss+xml" title="<blog name>" href="/feed.xml">` in the post `<head>`, even though the targets don't exist until Phase 2 lands. The cost is ~140 bytes per post; Phase 2 lights them up automatically without re-rendering Phase 1's posts. | Forward-compat: when Phase 2 ships, every existing post gets functional alternate links on the next publish. Saves a re-render pass. Cheap to add now. |
+| 13b | **`canonicalUrl` is computed once in `generator.ts:renderPost` and lifted into a named local const.** Currently inlined at `generator.ts:187` (`config.baseUrl + '/' + post.slug + '/'`). Phase 1 introduces `const canonicalUrl = ...` so the same value passes to the template var, `buildSeoMeta`, and `buildJsonLd` without recomputation. | The reviewer caught the inlining. Three callers using a single const beats three call sites recomputing the same string. Mechanical refactor. |
+| 13c | **`baseUrl` is normalized — trailing slash stripped — before concatenation with `'/' + slug + '/'`.** Adds `normalizeBaseUrl(s: string): string` to `src/rendering/seo.ts` (sibling of `extractDescription`). Tests assert `normalizeBaseUrl('https://x.com')`, `normalizeBaseUrl('https://x.com/')`, and `normalizeBaseUrl('https://x.com/path/')` produce identical canonical URLs once `'/'+slug+'/'` is appended. | Platform passes named-blog base URLs with a trailing slash (`https://${name}.slopit.io/`) but the existing inline concatenation (`config.baseUrl + '/' + post.slug + '/'`) appends another `/` — producing `https://${name}.slopit.io//slug/`. Currently broken; the reviewer caught it. Fixing in Phase 1 because every URL-bearing tag (canonical, og:url, JSON-LD mainEntityOfPage) depends on it. |
 | 14 | Pro/free tiers receive identical SEO output. The "Powered by SlopIt" footer link is the only Pro-vs-free distinction in core. | SEO is not a paywallable feature; making it one would harm free-tier discoverability and bring no upsell value. |
 | 15 | Drafts (`status: 'draft'`) are not rendered to disk today (`generator.ts` only writes for `status: 'published'`). This spec doesn't change that. SEO concerns are by definition published-only. | No-op. |
 | 16 | No new dependencies. JSON-LD is hand-built via a typed `Record<string, unknown>` and `JSON.stringify` with the script-tag-safe replacement. | Boring tech. CLAUDE.md "No abstract class with one implementation." |
@@ -115,6 +117,15 @@ export function buildSeoMeta(input: SeoInput): string
  * BlogPosting JSON-LD. Always non-empty.
  */
 export function buildJsonLd(input: SeoInput): string
+
+/**
+ * Resolve a post's description via the documented chain:
+ *   post.seoDescription → post.excerpt → extractDescription(post.body)
+ * Returns '' if all three are empty. Used by both buildSeoMeta and
+ * buildJsonLd so the chain is implemented once. Phase 2 (.md, RSS,
+ * llms.txt) re-uses the same helper.
+ */
+export function resolveDescription(post: Post): string
 
 /**
  * Markdown-stripped, whitespace-collapsed, word-boundary-truncated
@@ -215,6 +226,11 @@ Each step is a single regex. Total ~25 lines.
 | Case | Behavior |
 |------|----------|
 | Empty body | `extractDescription('') === ''`. Description meta omitted. og:description and twitter:description omitted. JSON-LD `description` key omitted. |
+| `excerpt` set, `seoDescription` empty | `resolveDescription` returns `excerpt` verbatim. Phase 2's `.md`/RSS/`llms.txt` re-uses the same helper; same value everywhere. |
+| `seoDescription` set, `excerpt` set | `seoDescription` wins. Author intent over auto-curated. |
+| `seoDescription` empty, `excerpt` empty, `body` non-empty | Falls through to `extractDescription(body)`. |
+| `baseUrl` ends in trailing slash | `normalizeBaseUrl` strips it; concatenation produces single-slash canonical URLs. |
+| `baseUrl` has a path component (`https://x.com/blog/`) | `normalizeBaseUrl` strips only the final slash, preserving the path. Resulting canonical: `https://x.com/blog/<slug>/`. |
 | Body that's only code blocks / headings markers | After stripping, may produce empty string. Same handling as empty body. |
 | Author set, no tags | Emits `meta name="author"`, `article:author`, JSON-LD `author`. No `article:tag` lines. JSON-LD `keywords` omitted. |
 | Tags set, no author | Emits `article:tag` per tag. JSON-LD `keywords` is comma-joined. No `author` keys. |

@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript (strict), Node.js, Vitest. Existing `marked` for rendering; not used here. Existing `escapeHtml` from `src/rendering/templates.ts`.
 
-**Spec:** [docs/superpowers/specs/2026-05-01-blog-post-seo-design.md](../specs/2026-05-01-blog-post-seo-design.md). Read the spec before starting — every "why" is answered there.
+**Spec:** [docs/superpowers/specs/2026-05-01-blog-post-seo-phase-1-design.md](../specs/2026-05-01-blog-post-seo-phase-1-design.md). Read the spec before starting — every "why" is answered there.
 
 ---
 
@@ -233,6 +233,147 @@ git commit -m "feat(seo): add escapeJsonForScript helper for safe JSON-LD embedd
 
 ---
 
+## Task 2.5: resolveDescription + normalizeBaseUrl helpers
+
+These two small helpers belong before `buildJsonLd` and `buildSeoMeta` because both consumers depend on them. Keeping the description chain in one place ensures the helper, not the call sites, is the single source of truth — which the reviewer caught was already drifting in earlier draft snippets.
+
+**Files:**
+
+- Modify: `src/rendering/seo.ts`
+- Modify: `tests/seo.test.ts`
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/seo.test.ts`:
+
+```ts
+import { resolveDescription, normalizeBaseUrl } from '../src/rendering/seo.js'
+import type { Post } from '../src/schema/index.js'
+
+const baseDate = '2026-05-01T12:34:56Z'
+const basePost: Post = {
+  id: 'p1',
+  blogId: 'b1',
+  title: 'Title',
+  slug: 'title',
+  body: 'Hello world.',
+  status: 'published',
+  tags: [],
+  publishedAt: baseDate,
+  createdAt: baseDate,
+  updatedAt: baseDate,
+}
+
+describe('resolveDescription', () => {
+  it('returns post.seoDescription when set', () => {
+    const post: Post = { ...basePost, seoDescription: 'Custom SEO desc.' }
+    expect(resolveDescription(post)).toBe('Custom SEO desc.')
+  })
+
+  it('falls back to post.excerpt when seoDescription is absent', () => {
+    const post: Post = { ...basePost, excerpt: 'Curated excerpt.' }
+    expect(resolveDescription(post)).toBe('Curated excerpt.')
+  })
+
+  it('falls back to extractDescription(body) when both seoDescription and excerpt are absent', () => {
+    expect(resolveDescription(basePost)).toBe('Hello world.')
+  })
+
+  it('seoDescription wins over excerpt when both are set', () => {
+    const post: Post = {
+      ...basePost,
+      seoDescription: 'SEO wins.',
+      excerpt: 'Should not appear.',
+    }
+    expect(resolveDescription(post)).toBe('SEO wins.')
+  })
+
+  it('returns empty string when all sources are empty', () => {
+    const post: Post = { ...basePost, body: '   ' }
+    expect(resolveDescription(post)).toBe('')
+  })
+})
+
+describe('normalizeBaseUrl', () => {
+  it('strips a single trailing slash', () => {
+    expect(normalizeBaseUrl('https://x.com/')).toBe('https://x.com')
+  })
+
+  it('returns input unchanged when no trailing slash', () => {
+    expect(normalizeBaseUrl('https://x.com')).toBe('https://x.com')
+  })
+
+  it('preserves path components and strips only the trailing slash', () => {
+    expect(normalizeBaseUrl('https://x.com/blog/')).toBe('https://x.com/blog')
+  })
+
+  it('strips only one slash even if input has multiple', () => {
+    expect(normalizeBaseUrl('https://x.com//')).toBe('https://x.com/')
+  })
+
+  it('produces identical canonicals for slashed and non-slashed input when used in concatenation', () => {
+    const slug = 'hello'
+    const a = normalizeBaseUrl('https://x.com') + '/' + slug + '/'
+    const b = normalizeBaseUrl('https://x.com/') + '/' + slug + '/'
+    expect(a).toBe(b)
+    expect(a).toBe('https://x.com/hello/')
+  })
+})
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `pnpm test tests/seo.test.ts -t "resolveDescription|normalizeBaseUrl"`
+Expected: FAIL — neither export exists.
+
+- [ ] **Step 3: Implement**
+
+Append to `src/rendering/seo.ts`:
+
+```ts
+import type { Post } from '../schema/index.js'
+
+/**
+ * Resolve a post's description via the documented chain:
+ *   post.seoDescription → post.excerpt → extractDescription(post.body)
+ * Returns '' if all three resolve to empty. Used by both buildSeoMeta
+ * and buildJsonLd in this phase, and re-used by Phase 2's `.md`/RSS/
+ * `llms.txt` generators. Single source of truth for description-fallback.
+ */
+export function resolveDescription(post: Post): string {
+  if (post.seoDescription) return post.seoDescription
+  if (post.excerpt) return post.excerpt
+  return extractDescription(post.body)
+}
+
+/**
+ * Strip one trailing slash from a base URL so that callers can safely
+ * append `'/' + slug + '/'` without producing double slashes.
+ *
+ * Platform passes named-blog base URLs as `https://${name}.slopit.io/`
+ * (with trailing slash); the existing inline concatenation in
+ * `generator.ts` would produce `https://${name}.slopit.io//slug/`.
+ * This helper normalizes once at the boundary.
+ */
+export function normalizeBaseUrl(s: string): string {
+  return s.endsWith('/') ? s.slice(0, -1) : s
+}
+```
+
+- [ ] **Step 4: Verify pass**
+
+Run: `pnpm test tests/seo.test.ts -t "resolveDescription|normalizeBaseUrl"`
+Expected: PASS — 10 tests.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/rendering/seo.ts tests/seo.test.ts
+git commit -m "feat(seo): add resolveDescription and normalizeBaseUrl helpers"
+```
+
+---
+
 ## Task 3: buildJsonLd — BlogPosting structured data
 
 **Files:**
@@ -351,13 +492,37 @@ describe('buildJsonLd', () => {
     expect(json.headline).toBe('evil </script><script>alert(1)')
   })
 
-  it('uses extracted body excerpt as description when seoDescription absent', () => {
+  it('uses extracted body excerpt as description when seoDescription and excerpt absent', () => {
     const out = buildJsonLd({ post: minimalPost, blog: minimalBlog, canonicalUrl: canonical })
     const json = JSON.parse(out.replace(/^<script[^>]*>/, '').replace(/<\/script>$/, '')) as Record<
       string,
       unknown
     >
     expect(json.description).toBe('Hello world.')
+  })
+
+  it('uses post.excerpt as description when seoDescription is absent', () => {
+    const post: Post = { ...minimalPost, excerpt: 'A curated excerpt.' }
+    const out = buildJsonLd({ post, blog: minimalBlog, canonicalUrl: canonical })
+    const json = JSON.parse(out.replace(/^<script[^>]*>/, '').replace(/<\/script>$/, '')) as Record<
+      string,
+      unknown
+    >
+    expect(json.description).toBe('A curated excerpt.')
+  })
+
+  it('seoDescription wins over excerpt when both are set', () => {
+    const post: Post = {
+      ...minimalPost,
+      seoDescription: 'SEO override.',
+      excerpt: 'Should not appear.',
+    }
+    const out = buildJsonLd({ post, blog: minimalBlog, canonicalUrl: canonical })
+    const json = JSON.parse(out.replace(/^<script[^>]*>/, '').replace(/<\/script>$/, '')) as Record<
+      string,
+      unknown
+    >
+    expect(json.description).toBe('SEO override.')
   })
 })
 ```
@@ -391,7 +556,10 @@ export interface SeoInput {
  */
 export function buildJsonLd(input: SeoInput): string {
   const { post, canonicalUrl } = input
-  const description = post.seoDescription ?? extractDescription(post.body)
+  // Description follows the documented fallback chain via resolveDescription
+  // (Task 2.5). Phase 2 reuses the same helper so .md/RSS/llms.txt produce
+  // the same description for the same post.
+  const description = resolveDescription(post)
 
   const data: Record<string, unknown> = {
     '@context': 'https://schema.org',
@@ -472,11 +640,29 @@ describe('buildSeoMeta', () => {
     expect(out).toContain('<meta name="twitter:title" content="Custom SEO Title">')
   })
 
-  it('falls back to extracted body excerpt for description', () => {
+  it('falls back to extracted body excerpt for description (no seoDescription, no excerpt)', () => {
     const out = buildSeoMeta({ post: minimalPost, blog: minimalBlog, canonicalUrl: canonical })
     expect(out).toContain('<meta name="description" content="Hello world.">')
     expect(out).toContain('<meta property="og:description" content="Hello world.">')
     expect(out).toContain('<meta name="twitter:description" content="Hello world.">')
+  })
+
+  it('uses post.excerpt when seoDescription absent and excerpt set', () => {
+    const post: Post = { ...minimalPost, excerpt: 'Curated.' }
+    const out = buildSeoMeta({ post, blog: minimalBlog, canonicalUrl: canonical })
+    expect(out).toContain('<meta name="description" content="Curated.">')
+    expect(out).toContain('<meta property="og:description" content="Curated.">')
+    expect(out).toContain('<meta name="twitter:description" content="Curated.">')
+  })
+
+  it('seoDescription wins over excerpt', () => {
+    const post: Post = {
+      ...minimalPost,
+      seoDescription: 'SEO override.',
+      excerpt: 'Should not appear.',
+    }
+    const out = buildSeoMeta({ post, blog: minimalBlog, canonicalUrl: canonical })
+    expect(out).toContain('<meta name="description" content="SEO override.">')
   })
 
   it('uses summary_large_image card and og:image when coverImage set', () => {
@@ -585,7 +771,7 @@ export function buildSeoMeta(input: SeoInput): string {
   const lines: string[] = []
 
   const title = post.seoTitle ?? post.title
-  const description = post.seoDescription ?? extractDescription(post.body)
+  const description = resolveDescription(post)
   const siteName = blog.name ?? blog.id
   const hasImage = Boolean(post.coverImage)
   const hasModified =
@@ -687,7 +873,9 @@ with:
 
 (Canonical moves above seoMeta so og:url has visual proximity to the canonical link in source view. Stylesheet stays last in `<head>` so the parser can start applying styles after metadata.)
 
-- [ ] **Step 2: Replace renderSeoMeta call site in generator.ts**
+- [ ] **Step 2: Replace renderSeoMeta call site in generator.ts and lift canonicalUrl into a named const**
+
+The current generator.ts inlines the canonical URL at line 187 (`canonicalUrl: config.baseUrl + '/' + post.slug + '/'`) and concatenates the raw `config.baseUrl`. Two problems: (a) the value isn't reusable across `seoMeta`/`jsonLd` callers without recomputation; (b) when platform passes a trailing-slash baseUrl (`https://${name}.slopit.io/`), the concatenation produces `https://${name}.slopit.io//slug/`.
 
 In `src/rendering/generator.ts`:
 
@@ -695,23 +883,37 @@ In `src/rendering/generator.ts`:
 2. At the top of the file, add:
 
 ```ts
-import { buildJsonLd, buildSeoMeta } from './seo.js'
+import { buildJsonLd, buildSeoMeta, normalizeBaseUrl } from './seo.js'
 ```
 
-3. Inside `createRenderer`'s `renderPost`, find the existing `seoMeta:` line in the `render(theme.post, { ... })` call. Replace:
+3. Inside `createRenderer`'s `renderPost`, just before the existing `render(theme.post, { ... })` call, lift the canonical URL into a named const built via `normalizeBaseUrl`:
 
 ```ts
+// Single source of truth for this post's URL. Used by:
+//   - <link rel="canonical">
+//   - og:url + JSON-LD mainEntityOfPage (via buildSeoMeta + buildJsonLd)
+// normalizeBaseUrl strips a trailing slash so concatenation is unambiguous
+// regardless of whether the caller (platform vs self-hosted) passes
+// `https://x.com` or `https://x.com/`.
+const canonicalUrl = normalizeBaseUrl(config.baseUrl) + '/' + post.slug + '/'
+```
+
+4. In the same `render(theme.post, { ... })` call, replace:
+
+```ts
+canonicalUrl: config.baseUrl + '/' + post.slug + '/',
 seoMeta: renderSeoMeta(post.seoTitle, post.seoDescription),
 ```
 
 with:
 
 ```ts
+canonicalUrl,
 seoMeta: buildSeoMeta({ post, blog, canonicalUrl }),
 jsonLd: buildJsonLd({ post, blog, canonicalUrl }),
 ```
 
-(`canonicalUrl` is already computed in scope — same value passed to `canonicalUrl` template var.)
+(All three usages now reference the single named const.)
 
 - [ ] **Step 3: Run the existing test suite**
 
@@ -764,6 +966,33 @@ c) Add new integration tests inside the existing `describe('createRenderer — r
     const html = readFileSync(join(outputDir, blog.id, 's', 'index.html'), 'utf8')
     expect(html).toContain('<meta property="og:title" content="Override">')
     expect(html).toContain('<meta name="description" content="Custom.">')
+  })
+
+  it('produces single-slash canonical URL regardless of baseUrl trailing slash', () => {
+    // Platform passes named-blog base URLs with a trailing slash; the renderer
+    // must normalize so canonical/og:url/JSON-LD mainEntityOfPage are
+    // identical for slashed and non-slashed input.
+    const { blog: blogA } = createBlog(store, { name: 'a' })
+    const rendererA = createRenderer({ store, outputDir, baseUrl: 'https://a.example.com' })
+    rendererA.renderPost(blogA.id, makePost({ blogId: blogA.id, slug: 'p' }))
+    const htmlA = readFileSync(join(outputDir, blogA.id, 'p', 'index.html'), 'utf8')
+
+    // Fresh dir for the trailing-slash variant — same blog id collision otherwise.
+    const outputDirB = join(dir, 'out2')
+    const { blog: blogB } = createBlog(store, { name: 'b' })
+    const rendererB = createRenderer({
+      store,
+      outputDir: outputDirB,
+      baseUrl: 'https://a.example.com/',
+    })
+    rendererB.renderPost(blogB.id, makePost({ blogId: blogB.id, slug: 'p' }))
+    const htmlB = readFileSync(join(outputDirB, blogB.id, 'p', 'index.html'), 'utf8')
+
+    // Both must contain the single-slash canonical, never `//p/`.
+    expect(htmlA).toContain('href="https://a.example.com/p/"')
+    expect(htmlB).toContain('href="https://a.example.com/p/"')
+    expect(htmlA).not.toContain('//p/')
+    expect(htmlB).not.toContain('//p/')
   })
 ```
 
